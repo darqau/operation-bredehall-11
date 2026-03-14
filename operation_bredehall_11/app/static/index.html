@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operation Bredehall 11 – Underhållsplanerare</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'DM Sans', system-ui, sans-serif; }
+    .card { transition: box-shadow 0.2s; }
+    .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+  </style>
+</head>
+<body class="bg-stone-50 text-stone-800 min-h-screen">
+  <div class="max-w-4xl mx-auto px-4 py-6 sm:py-8">
+    <header class="mb-8">
+      <h1 class="text-2xl sm:text-3xl font-bold text-stone-800">Operation Bredehall 11</h1>
+      <p class="text-stone-500 mt-1">Smart underhållsplanerare för villan</p>
+    </header>
+
+    <!-- Vy-väljare -->
+    <div class="flex flex-wrap gap-2 mb-6">
+      <span class="text-sm text-stone-500 self-center mr-2">Visa:</span>
+      <button type="button" data-view="all" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-amber-600 text-white">Alla</button>
+      <button type="button" data-view="next_month" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Nästa månad</button>
+      <button type="button" data-view="next_quarter" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Kommande kvartal</button>
+      <button type="button" data-view="this_year" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Hela året</button>
+    </div>
+
+    <!-- Lista uppgifter -->
+    <div id="task-list" class="space-y-3">
+      <p id="loading" class="text-stone-400">Laddar…</p>
+    </div>
+
+    <!-- Knapp ny uppgift -->
+    <div class="mt-8">
+      <button type="button" id="btn-new" class="px-4 py-2 rounded-lg font-medium bg-stone-800 text-white hover:bg-stone-700">+ Ny uppgift</button>
+    </div>
+  </div>
+
+  <!-- Modal: detaljer / redigera -->
+  <div id="modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4" aria-hidden="true">
+    <div class="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+      <div class="p-6">
+        <h2 id="modal-title" class="text-xl font-bold text-stone-800 mb-4">Uppgift</h2>
+        <div id="modal-body"></div>
+        <div class="mt-4 flex gap-2 justify-end">
+          <button type="button" id="modal-close" class="px-4 py-2 rounded-lg bg-stone-200 text-stone-700 hover:bg-stone-300">Stäng</button>
+          <button type="button" id="modal-delete" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 hidden">Ta bort</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '';
+    let currentView = 'all';
+    const currentYear = new Date().getFullYear();
+
+    const viewBtns = document.querySelectorAll('.view-btn');
+    viewBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        currentView = btn.dataset.view;
+        viewBtns.forEach(b => {
+          b.classList.toggle('bg-amber-600', b === btn);
+          b.classList.toggle('text-white', b === btn);
+          b.classList.toggle('bg-stone-200', b !== btn);
+          b.classList.toggle('text-stone-700', b !== btn);
+        });
+        loadTasks();
+      });
+    });
+
+    async function loadTasks() {
+      const list = document.getElementById('task-list');
+      const loading = document.getElementById('loading');
+      loading.classList.remove('hidden');
+      list.querySelectorAll('.card').forEach(el => el.remove());
+      try {
+        let url = `${API}/api/tasks?view=${currentView === 'all' ? '' : currentView}`;
+        if (currentView === 'this_year') url += `&year=${currentYear}`;
+        const r = await fetch(url);
+        const tasks = await r.json();
+        loading.classList.add('hidden');
+        if (tasks.length === 0) {
+          list.innerHTML = '<p class="text-stone-400">Inga uppgifter i denna vy.</p>';
+          return;
+        }
+        list.innerHTML = '';
+        tasks.forEach(t => {
+          const div = document.createElement('div');
+          div.className = 'card bg-white border border-stone-200 rounded-lg p-4 cursor-pointer';
+          div.innerHTML = `
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="font-semibold text-stone-800">${escapeHtml(t.title)}</h3>
+                <p class="text-sm text-stone-500 mt-1">${escapeHtml(t.category)} · ${escapeHtml(t.frequency)}</p>
+                ${t.next_deadline ? `<p class="text-sm text-amber-700 mt-1">Deadline: ${formatDate(t.next_deadline)}</p>` : ''}
+              </div>
+            </div>
+          `;
+          div.addEventListener('click', () => openDetail(t));
+          list.appendChild(div);
+        });
+      } catch (e) {
+        loading.classList.add('hidden');
+        list.innerHTML = '<p class="text-red-600">Kunde inte ladda uppgifter. Kontrollera att API:et svarar.</p>';
+      }
+    }
+
+    function formatDate(iso) {
+      if (!iso) return '–';
+      const d = new Date(iso + 'T12:00:00');
+      return d.toLocaleDateString('sv-SE', { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function escapeHtml(s) {
+      if (!s) return '';
+      const div = document.createElement('div');
+      div.textContent = s;
+      return div.innerHTML;
+    }
+
+    function openDetail(task) {
+      document.getElementById('modal-title').textContent = task.title;
+      document.getElementById('modal-body').innerHTML = `
+        <dl class="space-y-2 text-sm">
+          <dt class="font-medium text-stone-500">Kategori</dt><dd>${escapeHtml(task.category)}</dd>
+          <dt class="font-medium text-stone-500">Frekvens</dt><dd>${escapeHtml(task.frequency)}</dd>
+          <dt class="font-medium text-stone-500">Senast utförd</dt><dd>${task.last_done ? formatDate(task.last_done) : '–'}</dd>
+          <dt class="font-medium text-stone-500">Nästa deadline</dt><dd>${task.next_deadline ? formatDate(task.next_deadline) : '–'}</dd>
+          ${task.reason ? `<dt class="font-medium text-stone-500">Varför</dt><dd class="whitespace-pre-wrap">${escapeHtml(task.reason)}</dd>` : ''}
+          ${task.description ? `<dt class="font-medium text-stone-500">Beskrivning / Tips</dt><dd class="whitespace-pre-wrap">${escapeHtml(task.description)}</dd>` : ''}
+        </dl>
+      `;
+      const delBtn = document.getElementById('modal-delete');
+      delBtn.classList.toggle('hidden', !task.id);
+      delBtn.onclick = () => deleteTask(task.id);
+      document.getElementById('modal').classList.remove('hidden');
+      document.getElementById('modal').classList.add('flex');
+    }
+
+    async function deleteTask(id) {
+      if (!confirm('Ta bort denna uppgift?')) return;
+      try {
+        await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' });
+        document.getElementById('modal').classList.add('hidden');
+        document.getElementById('modal').classList.remove('flex');
+        loadTasks();
+      } catch (e) {
+        alert('Kunde inte ta bort.');
+      }
+    }
+
+    document.getElementById('modal-close').addEventListener('click', () => {
+      document.getElementById('modal').classList.add('hidden');
+      document.getElementById('modal').classList.remove('flex');
+    });
+    document.getElementById('modal').addEventListener('click', (e) => {
+      if (e.target.id === 'modal') {
+        document.getElementById('modal').classList.add('hidden');
+        document.getElementById('modal').classList.remove('flex');
+      }
+    });
+
+    document.getElementById('btn-new').addEventListener('click', () => {
+      const categories = ['VVS','Trädgård','Ekonomi','Administration','Hus','El','Värme','Annat'];
+      const frequencies = ['Månatlig','Kvartalsvis','Varannan termin','Årlig','Vart 2:a år','Vart 3:e år','Vart 5:e år','Vid behov'];
+      document.getElementById('modal-title').textContent = 'Ny uppgift';
+      document.getElementById('modal-body').innerHTML = `
+        <form id="new-form" class="space-y-3 text-sm">
+          <div><label class="block font-medium text-stone-600">Titel</label><input name="title" type="text" required class="w-full border border-stone-300 rounded-lg px-3 py-2" placeholder="t.ex. Rensa hängrännor"></div>
+          <div><label class="block font-medium text-stone-600">Kategori</label><select name="category" class="w-full border border-stone-300 rounded-lg px-3 py-2">${categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></div>
+          <div><label class="block font-medium text-stone-600">Frekvens</label><select name="frequency" class="w-full border border-stone-300 rounded-lg px-3 py-2">${frequencies.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('')}</select></div>
+          <div><label class="block font-medium text-stone-600">Nästa deadline (YYYY-MM-DD)</label><input name="next_deadline" type="date" class="w-full border border-stone-300 rounded-lg px-3 py-2"></div>
+          <div><label class="block font-medium text-stone-600">Varför (motivering)</label><textarea name="reason" rows="2" class="w-full border border-stone-300 rounded-lg px-3 py-2"></textarea></div>
+          <div><label class="block font-medium text-stone-600">Beskrivning / Tips</label><textarea name="description" rows="3" class="w-full border border-stone-300 rounded-lg px-3 py-2"></textarea></div>
+          <button type="submit" class="w-full py-2 rounded-lg bg-amber-600 text-white font-medium">Spara</button>
+        </form>
+      `;
+      document.getElementById('modal-delete').classList.add('hidden');
+      document.getElementById('modal').classList.remove('hidden');
+      document.getElementById('modal').classList.add('flex');
+      document.getElementById('new-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const body = {
+          title: fd.get('title'),
+          category: fd.get('category'),
+          frequency: fd.get('frequency'),
+          next_deadline: fd.get('next_deadline') || null,
+          reason: fd.get('reason') || null,
+          description: fd.get('description') || null,
+        };
+        try {
+          await fetch(`${API}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          document.getElementById('modal').classList.add('hidden');
+          document.getElementById('modal').classList.remove('flex');
+          loadTasks();
+        } catch (err) {
+          alert('Kunde inte spara.');
+        }
+      });
+    });
+
+    loadTasks();
+  </script>
+</body>
+</html>

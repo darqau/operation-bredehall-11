@@ -1,21 +1,29 @@
 """
 FastAPI-app för Operation Bredehall 11.
-Steg 1: Hello World + initiering av databas.
+Dashboard, CRUD för uppgifter, filtrering (nästa månad/kvartal/år).
 """
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
+from app.routers import tasks as tasks_router
+from app.seed.seed_tasks import seed_if_empty
+
+# Sökväg till statiska filer (frontend)
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Vid start: skapa tabeller om de inte finns."""
+    """Vid start: skapa tabeller, seed om tom."""
     init_db()
+    seed_if_empty()
     yield
-    # Vid shutdown kan ev. städning göras här
 
 
 app = FastAPI(
@@ -24,14 +32,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(tasks_router.router)
 
-@app.get("/", response_class=PlainTextResponse)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/")
 def root():
-    """Hello World – bekräftar att add-on körs."""
-    return "Hello from Operation Bredehall 11 – underhållsplaneraren kör!"
+    """Dashboard om index.html finns, annars Hello World."""
+    index_file = STATIC_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file, media_type="text/html")
+    return PlainTextResponse("Hello from Operation Bredehall 11 – underhållsplaneraren kör!")
 
 
 @app.get("/health", response_class=PlainTextResponse)
 def health():
-    """Enkel health check för HA/load balancers."""
     return "ok"
