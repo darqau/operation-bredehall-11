@@ -1,0 +1,3 @@
+# Säkerställ LF i container-kritiska filer (annars kan build/körning i HA misslyckas)
+run.sh text eol=lf
+Dockerfile text eol=lf
