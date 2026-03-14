@@ -2,6 +2,16 @@
 
 Smart underhållsplanerare för villan – Custom Add-on för Home Assistant (t.ex. HA Green).
 
+---
+
+### Öppna appen (webbgränssnitt)
+
+**[→ Öppna Operation Bredehall 11](http://homeassistant.local:8765)** (port 8765)
+
+*Fungerar när add-onen körs. Använd din HA-IP istället för `homeassistant.local` om länken inte öppnas, t.ex. `http://192.168.x.x:8765`.*
+
+---
+
 ## Steg 1 – Hello World
 
 ### Filstruktur
