@@ -1,6 +1,6 @@
 name: "Operation Bredehall 11"
 description: "Smart underhållsplanerare för villan – uppgifter, vyer och AI-assistent"
-version: "0.1.0"
+version: "0.2.0"
 arch:
   - aarch64
   - amd64

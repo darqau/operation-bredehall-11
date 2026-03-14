@@ -11,6 +11,8 @@ from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
 from app.routers import tasks as tasks_router
+from app.routers import calendar as calendar_router
+from app.routers import ai as ai_router
 from app.seed.seed_tasks import seed_if_empty
 
 # Sökväg till statiska filer (frontend)
@@ -33,6 +35,8 @@ app = FastAPI(
 )
 
 app.include_router(tasks_router.router)
+app.include_router(calendar_router.router)
+app.include_router(ai_router.router)
 
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

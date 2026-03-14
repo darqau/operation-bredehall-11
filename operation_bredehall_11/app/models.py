@@ -24,6 +24,7 @@ class TaskCategory(str, enum.Enum):
 
 class TaskFrequency(str, enum.Enum):
     """Frekvens för upprepning."""
+    EN_GANG = "En gång"
     MANAD = "Månatlig"
     KVARTAL = "Kvartalsvis"
     HALVAR = "Varannan termin"

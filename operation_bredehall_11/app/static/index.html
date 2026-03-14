@@ -34,9 +34,24 @@
       <p id="loading" class="text-stone-400">Laddar…</p>
     </div>
 
-    <!-- Knapp ny uppgift -->
-    <div class="mt-8">
-      <button type="button" id="btn-new" class="px-4 py-2 rounded-lg font-medium bg-stone-800 text-white hover:bg-stone-700">+ Ny uppgift</button>
+    <!-- Knapp ny uppgift + Kalender + AI -->
+    <div class="mt-8 space-y-6">
+      <div class="flex flex-wrap gap-3">
+        <button type="button" id="btn-new" class="px-4 py-2 rounded-lg font-medium bg-stone-800 text-white hover:bg-stone-700">+ Ny uppgift</button>
+        <a href="/api/calendar/ical" download="bredehall_deadlines.ics" class="inline-flex items-center px-4 py-2 rounded-lg font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">📅 Exportera till kalender (.ics)</a>
+      </div>
+
+      <section class="border-t border-stone-200 pt-6" aria-labelledby="ai-heading">
+        <h2 id="ai-heading" class="text-lg font-semibold text-stone-800 mb-3">AI-assistent</h2>
+        <div class="flex flex-wrap gap-3 mb-3">
+          <button type="button" id="btn-analyze" class="px-4 py-2 rounded-lg font-medium bg-amber-600 text-white hover:bg-amber-700">Analysera min underhållsplan</button>
+          <button type="button" id="btn-grants" class="px-4 py-2 rounded-lg font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Sök aktuella bidrag</button>
+        </div>
+        <div id="ai-result" class="bg-white border border-stone-200 rounded-lg p-4 min-h-[80px] text-sm text-stone-600 whitespace-pre-wrap hidden"></div>
+        <div id="ai-suggestions-wrap" class="mt-3 hidden">
+          <button type="button" id="btn-add-suggestions" class="px-4 py-2 rounded-lg font-medium bg-green-600 text-white hover:bg-green-700">Lägg till förslag i databasen</button>
+        </div>
+      </section>
     </div>
   </div>
 
@@ -87,10 +102,15 @@
       loading.textContent = 'Laddar…';
       list.querySelectorAll('.card').forEach(el => el.remove());
       list.querySelectorAll('.task-list-empty').forEach(el => el.remove());
+      list.querySelectorAll('.task-list-error').forEach(el => el.remove());
       try {
         let url = `${API}/api/tasks?view=${currentView === 'all' ? '' : currentView}`;
         if (currentView === 'this_year') url += `&year=${currentYear}`;
-        const r = await fetch(url);
+        const r = await fetch(url, { cache: 'no-store' });
+        if (!r.ok) {
+          const err = await r.text();
+          throw new Error(r.status + ' ' + (err || r.statusText));
+        }
         const tasks = await r.json();
         loading.classList.add('hidden');
         if (tasks.length === 0) {
@@ -117,7 +137,10 @@
         });
       } catch (e) {
         loading.classList.add('hidden');
-        list.innerHTML = '<p class="text-red-600">Kunde inte ladda uppgifter. Kontrollera att API:et svarar.</p>';
+        const errEl = document.createElement('p');
+        errEl.className = 'task-list-error text-red-600';
+        errEl.textContent = 'Kunde inte ladda uppgifter: ' + (e.message || e);
+        list.appendChild(errEl);
       }
     }
 
@@ -178,7 +201,7 @@
 
     document.getElementById('btn-new').addEventListener('click', () => {
       const categories = ['VVS','Trädgård','Ekonomi','Administration','Hus','El','Värme','Annat'];
-      const frequencies = ['Månatlig','Kvartalsvis','Varannan termin','Årlig','Vart 2:a år','Vart 3:e år','Vart 5:e år','Vid behov'];
+      const frequencies = ['En gång','Månatlig','Kvartalsvis','Varannan termin','Årlig','Vart 2:a år','Vart 3:e år','Vart 5:e år','Vid behov'];
       document.getElementById('modal-title').textContent = 'Ny uppgift';
       document.getElementById('modal-body').innerHTML = `
         <form id="new-form" class="space-y-3 text-sm">
@@ -198,22 +221,93 @@
         e.preventDefault();
         const fd = new FormData(e.target);
         const body = {
-          title: fd.get('title'),
+          title: (fd.get('title') || '').trim(),
           category: fd.get('category'),
           frequency: fd.get('frequency'),
           next_deadline: fd.get('next_deadline') || null,
-          reason: fd.get('reason') || null,
-          description: fd.get('description') || null,
+          reason: (fd.get('reason') || '').trim() || null,
+          description: (fd.get('description') || '').trim() || null,
         };
+        if (!body.title) {
+          alert('Ange en titel.');
+          return;
+        }
         try {
-          await fetch(`${API}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const res = await fetch(`${API}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            alert('Kunde inte spara: ' + (data.detail ? JSON.stringify(data.detail) : res.status + ' ' + res.statusText));
+            return;
+          }
           document.getElementById('modal').classList.add('hidden');
           document.getElementById('modal').classList.remove('flex');
           loadTasks();
         } catch (err) {
-          alert('Kunde inte spara.');
+          alert('Kunde inte spara: ' + (err.message || err));
         }
       });
+    });
+
+    let lastSuggestions = [];
+
+    document.getElementById('btn-analyze').addEventListener('click', async () => {
+      const resultEl = document.getElementById('ai-result');
+      const wrapEl = document.getElementById('ai-suggestions-wrap');
+      resultEl.classList.remove('hidden');
+      resultEl.textContent = 'Analyserar…';
+      wrapEl.classList.add('hidden');
+      try {
+        const r = await fetch(`${API}/api/ai/analyze-plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+        const data = await r.json();
+        if (!data.ok) {
+          resultEl.textContent = 'Fel: ' + (data.error || 'Okänt');
+          return;
+        }
+        lastSuggestions = data.suggestions || [];
+        let text = (data.analysis || '') + (lastSuggestions.length ? '\n\nFörslag på uppgifter:\n' + lastSuggestions.map(s => '• ' + (s.title || s)).join('\n') : '');
+        resultEl.textContent = text || 'Inga förslag.';
+        if (lastSuggestions.length) wrapEl.classList.remove('hidden');
+      } catch (e) {
+        resultEl.textContent = 'Kunde inte anropa AI: ' + (e.message || e);
+      }
+    });
+
+    document.getElementById('btn-grants').addEventListener('click', async () => {
+      const resultEl = document.getElementById('ai-result');
+      const wrapEl = document.getElementById('ai-suggestions-wrap');
+      resultEl.classList.remove('hidden');
+      resultEl.textContent = 'Söker bidrag…';
+      wrapEl.classList.add('hidden');
+      try {
+        const r = await fetch(`${API}/api/ai/search-grants`, { method: 'POST' });
+        const data = await r.json();
+        if (!data.ok) {
+          resultEl.textContent = 'Fel: ' + (data.error || 'Okänt');
+          return;
+        }
+        resultEl.textContent = data.text || 'Ingen information returnerad.';
+      } catch (e) {
+        resultEl.textContent = 'Kunde inte anropa AI: ' + (e.message || e);
+      }
+    });
+
+    document.getElementById('btn-add-suggestions').addEventListener('click', async () => {
+      if (!lastSuggestions.length) return;
+      const body = lastSuggestions.map(s => ({
+        title: s.title || 'Uppgift',
+        category: s.category || 'Annat',
+        frequency: s.frequency || 'Årlig',
+        reason: s.reason || null,
+      }));
+      try {
+        const r = await fetch(`${API}/api/ai/add-suggestions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await r.json();
+        document.getElementById('ai-suggestions-wrap').classList.add('hidden');
+        document.getElementById('ai-result').textContent = (document.getElementById('ai-result').textContent || '') + '\n\n✓ ' + (data.added || 0) + ' uppgifter tillagda.';
+        loadTasks();
+      } catch (e) {
+        alert('Kunde inte lägga till: ' + (e.message || e));
+      }
     });
 
     loadTasks();
