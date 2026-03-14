@@ -1,8 +1,5 @@
-# Home Assistant – Custom Add-on konfiguration
-# Operation Bredehall 11 – Smart underhållsplanerare
-
-name: Operation Bredehall 11
-description: Smart underhållsplanerare för villan – uppgifter, vyer och AI-assistent
+name: "Operation Bredehall 11"
+description: "Smart underhållsplanerare för villan – uppgifter, vyer och AI-assistent"
 version: "0.1.0"
 arch:
   - aarch64
@@ -11,7 +8,7 @@ arch:
   - armv7
   - i386
 init: false
-slug: operation_bredehall_11
+slug: "operation_bredehall_11"
 startup: application
 boot: auto
 host_network: false
@@ -22,11 +19,10 @@ options:
   google_calendar_credentials: ""
 
 schema:
-  port: int(default=8765)
-  openai_api_key: str(default="")
-  google_calendar_credentials: str(default="")
+  port: port
+  openai_api_key: str?
+  google_calendar_credentials: str?
 
-# Åtkomst till add-on config (port, API-nycklar) och persistent data
 map:
   - config:rw
   - share:rw
@@ -35,4 +31,4 @@ ports:
   8765/tcp: 8765
 
 ports_description:
-  8765/tcp: Webbgränssnitt för underhållsplaneraren
+  8765/tcp: "Webbgränssnitt för underhållsplaneraren"
