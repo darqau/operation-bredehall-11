@@ -19,7 +19,7 @@ options:
   google_calendar_credentials: ""
 
 schema:
-  port: int(default=8765)
+  port: port
   openai_api_key: str?
   google_calendar_credentials: str?
 
