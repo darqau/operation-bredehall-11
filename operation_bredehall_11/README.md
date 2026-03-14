@@ -21,8 +21,11 @@ Se **STRUCTURE.md** för full översikt. Kärnan nu:
    - **HA OS/Supervisor:** Lägg add-on i en repo som du lägger till under **Add-ons → Add-on store → Repositories**, eller använd **Samba share** och placera mappen under `/addons/` (beroende på hur du kör custom add-ons).
    - Vanligt sätt: skapa ett eget repo med struktur `repo/addon_slug/config.yaml`, `Dockerfile`, `run.sh` etc., och lägg till repot i HA.
 2. Efter att repot är tillagt: **Add-ons → Operation Bredehall 11 → Install → Start**.
-3. Öppna **Open Web UI** (port 8765) – du ska se:  
-   `Hello from Operation Bredehall 11 – underhållsplaneraren kör!`
+3. Öppna webbgränssnittet (dashboard med uppgifter och vyer):
+
+   **[→ Öppna Operation Bredehall 11 (port 8765)](http://homeassistant.local:8765)**
+
+   *Om länken inte fungerar, öppna manuellt:* `http://homeassistant.local:8765` — eller använd din HA-IP, t.ex. `http://192.168.x.x:8765`.
 
 ### Testa lokalt (utan Docker/HA)
 
