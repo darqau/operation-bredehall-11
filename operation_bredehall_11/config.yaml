@@ -18,6 +18,7 @@ options:
   openai_api_key: ""
   google_calendar_credentials: ""
 
+# HA tillåter inte default-värden i schema (t.ex. int(default=8765)). Använd "port" för port, "str?" för frivilliga strängar.
 schema:
   port: port
   openai_api_key: str?
