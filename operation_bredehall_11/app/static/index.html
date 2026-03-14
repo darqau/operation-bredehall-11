@@ -75,9 +75,18 @@
 
     async function loadTasks() {
       const list = document.getElementById('task-list');
-      const loading = document.getElementById('loading');
+      let loading = document.getElementById('loading');
+      if (!loading) {
+        loading = document.createElement('p');
+        loading.id = 'loading';
+        loading.className = 'text-stone-400';
+        loading.textContent = 'Laddar…';
+        list.appendChild(loading);
+      }
       loading.classList.remove('hidden');
+      loading.textContent = 'Laddar…';
       list.querySelectorAll('.card').forEach(el => el.remove());
+      list.querySelectorAll('.task-list-empty').forEach(el => el.remove());
       try {
         let url = `${API}/api/tasks?view=${currentView === 'all' ? '' : currentView}`;
         if (currentView === 'this_year') url += `&year=${currentYear}`;
@@ -85,10 +94,12 @@
         const tasks = await r.json();
         loading.classList.add('hidden');
         if (tasks.length === 0) {
-          list.innerHTML = '<p class="text-stone-400">Inga uppgifter i denna vy.</p>';
+          const empty = document.createElement('p');
+          empty.className = 'task-list-empty text-stone-400';
+          empty.textContent = 'Inga uppgifter i denna vy.';
+          list.appendChild(empty);
           return;
         }
-        list.innerHTML = '';
         tasks.forEach(t => {
           const div = document.createElement('div');
           div.className = 'card bg-white border border-stone-200 rounded-lg p-4 cursor-pointer';

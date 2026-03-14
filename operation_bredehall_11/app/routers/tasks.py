@@ -18,7 +18,10 @@ def list_tasks(
     db: Session = Depends(get_db),
 ):
     """Lista uppgifter. view: next_month | next_quarter | this_year | all. year för this_year (default: innevarande år)."""
-    return get_tasks(db, view=view, year=year)
+    v = view.strip() if view else None
+    if v == "":
+        v = None
+    return get_tasks(db, view=v, year=year)
 
 
 @router.get("/{task_id}", response_model=TaskResponse)
