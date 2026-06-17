@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import init_db
+from app.routers import finance as finance_router
 from app.routers import tasks as tasks_router
 from app.routers import calendar as calendar_router
 from app.routers import ai as ai_router
@@ -30,10 +31,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Operation Bredehall 11",
-    description="Smart underhållsplanerare för villan",
+    description="Smart underhållsplanerare och ekonomi för villan",
     lifespan=lifespan,
 )
 
+app.include_router(finance_router.router)
 app.include_router(tasks_router.router)
 app.include_router(calendar_router.router)
 app.include_router(ai_router.router)

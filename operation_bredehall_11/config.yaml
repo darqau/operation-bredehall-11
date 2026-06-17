@@ -17,12 +17,13 @@ options:
   port: 8765
   openai_api_key: ""
   google_calendar_credentials: ""
+  finance_storage_mode: "local"
 
-# HA tillåter inte default-värden i schema (t.ex. int(default=8765)). Använd "port" för port, "str?" för frivilliga strängar.
 schema:
   port: port
   openai_api_key: str?
   google_calendar_credentials: str?
+  finance_storage_mode: str?
 
 map:
   - config:rw

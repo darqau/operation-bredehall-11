@@ -5,7 +5,7 @@ SQLite-tabellstruktur för Operation Bredehall 11.
 from datetime import date
 from typing import Optional
 
-from sqlalchemy import String, Text, Date, Integer
+from sqlalchemy import String, Text, Date, Integer, Float, Boolean, Index
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 import enum
 
@@ -61,3 +61,27 @@ class Task(Base):
 
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, title={self.title!r}, category={self.category})>"
+
+
+class FinanceTransaction(Base):
+    """Bank- och manuella transaktioner (ersätter RAW_DATA + MANUAL_DATA + ALL_DATA)."""
+    __tablename__ = "finance_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    txn_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    balance: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    account: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    typ: Mapped[str] = mapped_column(String(32), nullable=False, default="Övrigt")
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="Övrigt")
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="SEK")
+    sender: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    receiver: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    source_file: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    is_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    __table_args__ = (
+        Index("ix_finance_account_date", "account", "txn_date"),
+    )

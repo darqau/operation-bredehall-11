@@ -2,315 +2,238 @@
 <html lang="sv">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Operation Bredehall 11 – Underhållsplanerare</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Operation Bredehall 11</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700;1,9..40,400&display=swap" rel="stylesheet">
-  <style>
-    body { font-family: 'DM Sans', system-ui, sans-serif; }
-    .card { transition: box-shadow 0.2s; }
-    .card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-  </style>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/app.css?v=3">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
-<body class="bg-stone-50 text-stone-800 min-h-screen">
-  <div class="max-w-4xl mx-auto px-4 py-6 sm:py-8">
-    <header class="mb-8">
-      <h1 class="text-2xl sm:text-3xl font-bold text-stone-800">Operation Bredehall 11</h1>
-      <p class="text-stone-500 mt-1">Smart underhållsplanerare för villan</p>
-    </header>
+<body>
+  <div class="overlay-sidebar" id="sidebar-overlay"></div>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">Bredehall</div>
+      <div class="brand-sub">Villa &amp; ekonomi</div>
+      <nav>
+        <button class="nav-item active" data-page="home"><span class="nav-icon">🏠</span> Översikt</button>
+        <button class="nav-item" data-page="maintenance"><span class="nav-icon">🔧</span> Underhåll</button>
+        <button class="nav-item" data-page="finance"><span class="nav-icon">💰</span> Ekonomi</button>
+        <button class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span> Inställningar</button>
+      </nav>
+    </aside>
 
-    <!-- Vy-väljare -->
-    <div class="flex flex-wrap gap-2 mb-6">
-      <span class="text-sm text-stone-500 self-center mr-2">Visa:</span>
-      <button type="button" data-view="all" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-amber-600 text-white">Alla</button>
-      <button type="button" data-view="next_month" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Nästa månad</button>
-      <button type="button" data-view="next_quarter" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Kommande kvartal</button>
-      <button type="button" data-view="this_year" class="view-btn px-4 py-2 rounded-lg text-sm font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Hela året</button>
-    </div>
-
-    <!-- Lista uppgifter -->
-    <div id="task-list" class="space-y-3">
-      <p id="loading" class="text-stone-400">Laddar…</p>
-    </div>
-
-    <!-- Knapp ny uppgift + Kalender + AI -->
-    <div class="mt-8 space-y-6">
-      <div class="flex flex-wrap gap-3">
-        <button type="button" id="btn-new" class="px-4 py-2 rounded-lg font-medium bg-stone-800 text-white hover:bg-stone-700">+ Ny uppgift</button>
-        <a href="/api/calendar/ical" download="bredehall_deadlines.ics" class="inline-flex items-center px-4 py-2 rounded-lg font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">📅 Exportera till kalender (.ics)</a>
-      </div>
-
-      <section class="border-t border-stone-200 pt-6" aria-labelledby="ai-heading">
-        <h2 id="ai-heading" class="text-lg font-semibold text-stone-800 mb-3">AI-assistent</h2>
-        <div class="flex flex-wrap gap-3 mb-3">
-          <button type="button" id="btn-analyze" class="px-4 py-2 rounded-lg font-medium bg-amber-600 text-white hover:bg-amber-700">Analysera min underhållsplan</button>
-          <button type="button" id="btn-grants" class="px-4 py-2 rounded-lg font-medium bg-stone-200 text-stone-700 hover:bg-stone-300">Sök aktuella bidrag</button>
+    <div class="main-wrap">
+      <header class="topbar">
+        <div>
+          <button class="menu-toggle" id="menu-toggle" aria-label="Meny">☰</button>
         </div>
-        <div id="ai-result" class="bg-white border border-stone-200 rounded-lg p-4 min-h-[80px] text-sm text-stone-600 whitespace-pre-wrap hidden"></div>
-        <div id="ai-suggestions-wrap" class="mt-3 hidden">
-          <button type="button" id="btn-add-suggestions" class="px-4 py-2 rounded-lg font-medium bg-green-600 text-white hover:bg-green-700">Lägg till förslag i databasen</button>
+        <div style="flex:1;margin-left:0.75rem">
+          <h1 id="page-title">Översikt</h1>
+          <p id="page-subtitle">Villa &amp; ekonomi i ett</p>
         </div>
-      </section>
-    </div>
-  </div>
+      </header>
 
-  <!-- Modal: detaljer / redigera -->
-  <div id="modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50 p-4" aria-hidden="true">
-    <div class="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-      <div class="p-6">
-        <h2 id="modal-title" class="text-xl font-bold text-stone-800 mb-4">Uppgift</h2>
-        <div id="modal-body"></div>
-        <div class="mt-4 flex gap-2 justify-end">
-          <button type="button" id="modal-close" class="px-4 py-2 rounded-lg bg-stone-200 text-stone-700 hover:bg-stone-300">Stäng</button>
-          <button type="button" id="modal-delete" class="px-4 py-2 rounded-lg bg-red-600 text-white hover:bg-red-700 hidden">Ta bort</button>
-        </div>
-      </div>
-    </div>
-  </div>
+      <main class="content">
+        <!-- HOME -->
+        <section class="page active" data-page="home">
+          <div class="grid grid-4" id="home-stats"></div>
+          <h2 class="section-title" style="margin-top:1.5rem">Senaste transaktioner</h2>
+          <div id="home-recent-finance"></div>
+        </section>
 
-  <script>
-    const API = '';
-    let currentView = 'all';
-    const currentYear = new Date().getFullYear();
+        <!-- MAINTENANCE -->
+        <section class="page" data-page="maintenance">
+          <div class="chip-row">
+            <button class="chip task-view-chip active" data-view="all">Alla</button>
+            <button class="chip task-view-chip" data-view="next_month">Nästa månad</button>
+            <button class="chip task-view-chip" data-view="next_quarter">Kommande kvartal</button>
+            <button class="chip task-view-chip" data-view="this_year">Hela året</button>
+            <button class="chip task-view-chip" data-view="overdue">Försenade</button>
+          </div>
+          <div class="toolbar">
+            <input class="input" id="task-search" placeholder="Sök uppgift…" style="max-width:200px">
+            <select class="select" id="task-category-filter" style="max-width:160px">
+              <option value="">Alla kategorier</option>
+              <option>VVS</option><option>Trädgård</option><option>Ekonomi</option>
+              <option>Administration</option><option>Hus</option><option>El</option>
+              <option>Värme</option><option>Annat</option>
+            </select>
+            <button class="btn btn-primary" id="btn-new-task">+ Ny uppgift</button>
+            <a class="btn" href="/api/calendar/ical" download="bredehall.ics">📅 Kalender</a>
+          </div>
+          <div id="task-list"></div>
 
-    const viewBtns = document.querySelectorAll('.view-btn');
-    viewBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        currentView = btn.dataset.view;
-        viewBtns.forEach(b => {
-          b.classList.toggle('bg-amber-600', b === btn);
-          b.classList.toggle('text-white', b === btn);
-          b.classList.toggle('bg-stone-200', b !== btn);
-          b.classList.toggle('text-stone-700', b !== btn);
-        });
-        loadTasks();
-      });
-    });
+          <div class="card" style="margin-top:1.5rem">
+            <h2 class="section-title">AI-assistent</h2>
+            <div class="toolbar">
+              <button class="btn btn-primary" id="btn-analyze">Analysera plan</button>
+              <button class="btn" id="btn-grants">Sök bidrag</button>
+            </div>
+            <div id="ai-result" class="hidden" style="font-size:0.875rem;white-space:pre-wrap;color:var(--text-muted)"></div>
+            <div id="ai-suggestions-wrap" class="hidden">
+              <ul class="suggestion-list" id="ai-suggestions-list"></ul>
+              <button class="btn btn-success" id="btn-add-suggestions">Lägg till valda</button>
+            </div>
+          </div>
+        </section>
 
-    async function loadTasks() {
-      const list = document.getElementById('task-list');
-      let loading = document.getElementById('loading');
-      if (!loading) {
-        loading = document.createElement('p');
-        loading.id = 'loading';
-        loading.className = 'text-stone-400';
-        loading.textContent = 'Laddar…';
-        list.appendChild(loading);
-      }
-      loading.classList.remove('hidden');
-      loading.textContent = 'Laddar…';
-      list.querySelectorAll('.card').forEach(el => el.remove());
-      list.querySelectorAll('.task-list-empty').forEach(el => el.remove());
-      list.querySelectorAll('.task-list-error').forEach(el => el.remove());
-      try {
-        let url = `${API}/api/tasks?view=${currentView === 'all' ? '' : currentView}`;
-        if (currentView === 'this_year') url += `&year=${currentYear}`;
-        const r = await fetch(url, { cache: 'no-store' });
-        if (!r.ok) {
-          const err = await r.text();
-          throw new Error(r.status + ' ' + (err || r.statusText));
-        }
-        const tasks = await r.json();
-        loading.classList.add('hidden');
-        if (tasks.length === 0) {
-          const empty = document.createElement('p');
-          empty.className = 'task-list-empty text-stone-400';
-          empty.textContent = 'Inga uppgifter i denna vy.';
-          list.appendChild(empty);
-          return;
-        }
-        tasks.forEach(t => {
-          const div = document.createElement('div');
-          div.className = 'card bg-white border border-stone-200 rounded-lg p-4 cursor-pointer';
-          div.innerHTML = `
-            <div class="flex justify-between items-start">
-              <div>
-                <h3 class="font-semibold text-stone-800">${escapeHtml(t.title)}</h3>
-                <p class="text-sm text-stone-500 mt-1">${escapeHtml(t.category)} · ${escapeHtml(t.frequency)}</p>
-                ${t.next_deadline ? `<p class="text-sm text-amber-700 mt-1">Deadline: ${formatDate(t.next_deadline)}</p>` : ''}
+        <!-- FINANCE -->
+        <section class="page" data-page="finance">
+          <div class="grid grid-3" style="margin-bottom:1rem">
+            <div class="card">
+              <div class="stat-value stat-success" id="finance-total">–</div>
+              <div class="stat-label">Totalt saldo</div>
+            </div>
+            <div class="card">
+              <div class="stat-value stat-accent" id="finance-txn-count">0</div>
+              <div class="stat-label">Transaktioner</div>
+            </div>
+            <div class="card">
+              <div class="toolbar" style="margin:0;height:100%;align-items:center">
+                <button class="btn btn-primary" id="btn-process">Importera CSV</button>
+                <button class="btn" id="btn-manual-txn">+ Manuell</button>
+                <button class="btn" id="btn-recategorize" title="Kör om den regelbaserade kategoriseringen">↻ Kategorisera</button>
+                <button class="btn" id="btn-recategorize-ai" title="Använd lokal AI (LM Studio) på okategoriserade">✨ AI-kategorisera</button>
               </div>
             </div>
-          `;
-          div.addEventListener('click', () => openDetail(t));
-          list.appendChild(div);
-        });
-      } catch (e) {
-        loading.classList.add('hidden');
-        const errEl = document.createElement('p');
-        errEl.className = 'task-list-error text-red-600';
-        errEl.textContent = 'Kunde inte ladda uppgifter: ' + (e.message || e);
-        list.appendChild(errEl);
-      }
-    }
+          </div>
+          <p class="error" id="finance-error"></p>
+          <p class="process-result" id="process-result"></p>
 
-    function formatDate(iso) {
-      if (!iso) return '–';
-      const d = new Date(iso + 'T12:00:00');
-      return d.toLocaleDateString('sv-SE', { year: 'numeric', month: 'short', day: 'numeric' });
-    }
+          <div class="card finance-filters">
+            <h3 class="section-title">Filter &amp; analys</h3>
+            <div class="filter-grid">
+              <div class="field"><label class="label">Konto</label><select class="select" id="fin-filter-account"><option value="">Alla konton</option></select></div>
+              <div class="field"><label class="label">År</label><select class="select" id="fin-filter-year"><option value="">Alla år</option></select></div>
+              <div class="field"><label class="label">Kategori</label><select class="select" id="fin-filter-category"><option value="">Alla</option></select></div>
+              <div class="field"><label class="label">Typ</label><select class="select" id="fin-filter-typ"><option value="">Alla</option></select></div>
+              <div class="field"><label class="label">Från</label><input class="input" type="date" id="fin-filter-from"></div>
+              <div class="field"><label class="label">Till</label><input class="input" type="date" id="fin-filter-to"></div>
+              <div class="field" style="grid-column:1/-1"><label class="label">Sök beskrivning</label><input class="input" id="fin-filter-search" placeholder="t.ex. ICA, hyra…"></div>
+            </div>
+            <div class="toolbar">
+              <label class="check-label"><input type="checkbox" id="fin-filter-no-transfer" checked> Dölj överföringar</label>
+              <button class="btn btn-sm" id="fin-filter-reset">Rensa filter</button>
+              <button class="btn btn-sm btn-primary" id="fin-filter-apply">Uppdatera</button>
+            </div>
+          </div>
 
-    function escapeHtml(s) {
-      if (!s) return '';
-      const div = document.createElement('div');
-      div.textContent = s;
-      return div.innerHTML;
-    }
+          <div class="grid grid-4" id="fin-summary" style="margin:1rem 0"></div>
 
-    function openDetail(task) {
-      document.getElementById('modal-title').textContent = task.title;
-      document.getElementById('modal-body').innerHTML = `
-        <dl class="space-y-2 text-sm">
-          <dt class="font-medium text-stone-500">Kategori</dt><dd>${escapeHtml(task.category)}</dd>
-          <dt class="font-medium text-stone-500">Frekvens</dt><dd>${escapeHtml(task.frequency)}</dd>
-          <dt class="font-medium text-stone-500">Senast utförd</dt><dd>${task.last_done ? formatDate(task.last_done) : '–'}</dd>
-          <dt class="font-medium text-stone-500">Nästa deadline</dt><dd>${task.next_deadline ? formatDate(task.next_deadline) : '–'}</dd>
-          ${task.reason ? `<dt class="font-medium text-stone-500">Varför</dt><dd class="whitespace-pre-wrap">${escapeHtml(task.reason)}</dd>` : ''}
-          ${task.description ? `<dt class="font-medium text-stone-500">Beskrivning / Tips</dt><dd class="whitespace-pre-wrap">${escapeHtml(task.description)}</dd>` : ''}
-        </dl>
-      `;
-      const delBtn = document.getElementById('modal-delete');
-      delBtn.classList.toggle('hidden', !task.id);
-      delBtn.onclick = () => deleteTask(task.id);
-      document.getElementById('modal').classList.remove('hidden');
-      document.getElementById('modal').classList.add('flex');
-    }
+          <div class="drop-zone" id="drop-zone">
+            <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden>
+            <div class="drop-zone-icon">📂</div>
+            <p class="drop-zone-title">Släpp bank-CSV här</p>
+            <p class="drop-zone-sub">Auto-detekterar konto · annars väljer du mapp</p>
+            <button type="button" class="btn btn-sm" id="btn-browse-files">Välj fil</button>
+          </div>
+          <div class="folder-grid" id="folder-grid"></div>
 
-    async function deleteTask(id) {
-      if (!confirm('Ta bort denna uppgift?')) return;
-      try {
-        await fetch(`${API}/api/tasks/${id}`, { method: 'DELETE' });
-        document.getElementById('modal').classList.add('hidden');
-        document.getElementById('modal').classList.remove('flex');
-        loadTasks();
-      } catch (e) {
-        alert('Kunde inte ta bort.');
-      }
-    }
+          <div class="grid grid-2" style="margin:1rem 0">
+            <div class="card">
+              <h3 class="section-title">Netto över tid</h3>
+              <div class="chart-box chart-box-lg"><canvas id="chart-net"></canvas></div>
+            </div>
+            <div class="card">
+              <h3 class="section-title">Inkomst vs utgift per månad</h3>
+              <div class="chart-box chart-box-lg"><canvas id="chart-income-expense"></canvas></div>
+            </div>
+          </div>
+          <div class="grid grid-2" style="margin-bottom:1rem">
+            <div class="card">
+              <h3 class="section-title">Utgifter per kategori</h3>
+              <div class="chart-box chart-box-lg"><canvas id="chart-categories"></canvas></div>
+            </div>
+            <div class="card">
+              <h3 class="section-title">Månatliga utgifter</h3>
+              <div class="chart-box chart-box-lg"><canvas id="chart-expenses"></canvas></div>
+            </div>
+          </div>
 
-    document.getElementById('modal-close').addEventListener('click', () => {
-      document.getElementById('modal').classList.add('hidden');
-      document.getElementById('modal').classList.remove('flex');
-    });
-    document.getElementById('modal').addEventListener('click', (e) => {
-      if (e.target.id === 'modal') {
-        document.getElementById('modal').classList.add('hidden');
-        document.getElementById('modal').classList.remove('flex');
-      }
-    });
+          <div class="grid grid-2">
+            <div>
+              <h3 class="section-title">Kontosaldo</h3>
+              <div id="account-list"></div>
+            </div>
+            <div>
+              <h3 class="section-title">Transaktioner <span id="txn-count-label" class="task-meta"></span></h3>
+              <div id="txn-table-wrap"></div>
+              <div class="toolbar" id="txn-pagination" style="margin-top:0.5rem"></div>
+            </div>
+          </div>
+        </section>
 
-    document.getElementById('btn-new').addEventListener('click', () => {
-      const categories = ['VVS','Trädgård','Ekonomi','Administration','Hus','El','Värme','Annat'];
-      const frequencies = ['En gång','Månatlig','Kvartalsvis','Varannan termin','Årlig','Vart 2:a år','Vart 3:e år','Vart 5:e år','Vid behov'];
-      document.getElementById('modal-title').textContent = 'Ny uppgift';
-      document.getElementById('modal-body').innerHTML = `
-        <form id="new-form" class="space-y-3 text-sm">
-          <div><label class="block font-medium text-stone-600">Titel</label><input name="title" type="text" required class="w-full border border-stone-300 rounded-lg px-3 py-2" placeholder="t.ex. Rensa hängrännor"></div>
-          <div><label class="block font-medium text-stone-600">Kategori</label><select name="category" class="w-full border border-stone-300 rounded-lg px-3 py-2">${categories.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('')}</select></div>
-          <div><label class="block font-medium text-stone-600">Frekvens</label><select name="frequency" class="w-full border border-stone-300 rounded-lg px-3 py-2">${frequencies.map(f => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join('')}</select></div>
-          <div><label class="block font-medium text-stone-600">Nästa deadline (YYYY-MM-DD)</label><input name="next_deadline" type="date" class="w-full border border-stone-300 rounded-lg px-3 py-2"></div>
-          <div><label class="block font-medium text-stone-600">Varför (motivering)</label><textarea name="reason" rows="2" class="w-full border border-stone-300 rounded-lg px-3 py-2"></textarea></div>
-          <div><label class="block font-medium text-stone-600">Beskrivning / Tips</label><textarea name="description" rows="3" class="w-full border border-stone-300 rounded-lg px-3 py-2"></textarea></div>
-          <button type="submit" class="w-full py-2 rounded-lg bg-amber-600 text-white font-medium">Spara</button>
-        </form>
-      `;
-      document.getElementById('modal-delete').classList.add('hidden');
-      document.getElementById('modal').classList.remove('hidden');
-      document.getElementById('modal').classList.add('flex');
-      document.getElementById('new-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const fd = new FormData(e.target);
-        const body = {
-          title: (fd.get('title') || '').trim(),
-          category: fd.get('category'),
-          frequency: fd.get('frequency'),
-          next_deadline: fd.get('next_deadline') || null,
-          reason: (fd.get('reason') || '').trim() || null,
-          description: (fd.get('description') || '').trim() || null,
-        };
-        if (!body.title) {
-          alert('Ange en titel.');
-          return;
-        }
-        try {
-          const res = await fetch(`${API}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            alert('Kunde inte spara: ' + (data.detail ? JSON.stringify(data.detail) : res.status + ' ' + res.statusText));
-            return;
-          }
-          document.getElementById('modal').classList.add('hidden');
-          document.getElementById('modal').classList.remove('flex');
-          loadTasks();
-        } catch (err) {
-          alert('Kunde inte spara: ' + (err.message || err));
-        }
-      });
-    });
+        <!-- SETTINGS -->
+        <section class="page" data-page="settings">
+          <div class="card">
+            <h2 class="section-title">Datalagring</h2>
+            <p id="settings-info" style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem"></p>
+            <div class="toggle-row">
+              <button type="button" id="storage-local" class="active">Lokal mapp</button>
+              <button type="button" id="storage-gdrive">Google Drive</button>
+            </div>
 
-    let lastSuggestions = [];
+            <div class="field">
+              <label class="label">Arkiv-mapp ID (Google Drive)</label>
+              <input class="input" id="cfg-archive" placeholder="1NR3ch3f...">
+            </div>
+            <div class="field">
+              <label class="label">Egna konton (regex för överföringar)</label>
+              <input class="input" id="cfg-regex">
+            </div>
+            <div class="field">
+              <label class="label">Sökväg till Google credentials JSON</label>
+              <input class="input" id="cfg-gdrive-path" placeholder="data/gdrive_credentials.json">
+            </div>
 
-    document.getElementById('btn-analyze').addEventListener('click', async () => {
-      const resultEl = document.getElementById('ai-result');
-      const wrapEl = document.getElementById('ai-suggestions-wrap');
-      resultEl.classList.remove('hidden');
-      resultEl.textContent = 'Analyserar…';
-      wrapEl.classList.add('hidden');
-      try {
-        const r = await fetch(`${API}/api/ai/analyze-plan`, { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-        const data = await r.json();
-        if (!data.ok) {
-          resultEl.textContent = 'Fel: ' + (data.error || 'Okänt');
-          return;
-        }
-        lastSuggestions = data.suggestions || [];
-        let text = (data.analysis || '') + (lastSuggestions.length ? '\n\nFörslag på uppgifter:\n' + lastSuggestions.map(s => '• ' + (s.title || s)).join('\n') : '');
-        resultEl.textContent = text || 'Inga förslag.';
-        if (lastSuggestions.length) wrapEl.classList.remove('hidden');
-      } catch (e) {
-        resultEl.textContent = 'Kunde inte anropa AI: ' + (e.message || e);
-      }
-    });
+            <h3 class="section-title">Konton &amp; mappar</h3>
+            <div id="folder-map-editor"></div>
+            <button class="btn btn-sm" id="btn-add-folder" style="margin-bottom:1rem">+ Lägg till konto</button>
 
-    document.getElementById('btn-grants').addEventListener('click', async () => {
-      const resultEl = document.getElementById('ai-result');
-      const wrapEl = document.getElementById('ai-suggestions-wrap');
-      resultEl.classList.remove('hidden');
-      resultEl.textContent = 'Söker bidrag…';
-      wrapEl.classList.add('hidden');
-      try {
-        const r = await fetch(`${API}/api/ai/search-grants`, { method: 'POST' });
-        const data = await r.json();
-        if (!data.ok) {
-          resultEl.textContent = 'Fel: ' + (data.error || 'Okänt');
-          return;
-        }
-        resultEl.textContent = data.text || 'Ingen information returnerad.';
-      } catch (e) {
-        resultEl.textContent = 'Kunde inte anropa AI: ' + (e.message || e);
-      }
-    });
+            <h3 class="section-title" style="margin-top:1.5rem">AI-kategorisering (valfritt)</h3>
+            <p style="font-size:0.82rem;color:var(--text-muted);margin:0 0 0.75rem">
+              Använd en lokal AI via LM Studio för att kategorisera kvarvarande "Övrigt"-poster.
+              Reglerna körs alltid först; AI är bara ett komplement. Starta LM Studio, ladda en modell och starta servern (Local Server).
+            </p>
+            <label class="check-label" style="margin-bottom:0.75rem"><input type="checkbox" id="cfg-ai-enabled"> Aktivera AI-kategorisering</label>
+            <div class="field"><label class="label">AI base URL</label><input class="input" id="cfg-ai-url" placeholder="http://localhost:1234/v1"></div>
+            <div class="field"><label class="label">API-nyckel (godtycklig för LM Studio)</label><input class="input" id="cfg-ai-key" placeholder="lm-studio"></div>
+            <div class="field"><label class="label">Modell-ID</label><input class="input" id="cfg-ai-model" placeholder="local-model"></div>
+            <div class="toolbar">
+              <button class="btn btn-sm" id="btn-ai-test">Testa anslutning</button>
+              <span id="ai-test-result" style="font-size:0.82rem;color:var(--text-muted)"></span>
+            </div>
 
-    document.getElementById('btn-add-suggestions').addEventListener('click', async () => {
-      if (!lastSuggestions.length) return;
-      const body = lastSuggestions.map(s => ({
-        title: s.title || 'Uppgift',
-        category: s.category || 'Annat',
-        frequency: s.frequency || 'Årlig',
-        reason: s.reason || null,
-      }));
-      try {
-        const r = await fetch(`${API}/api/ai/add-suggestions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-        const data = await r.json();
-        document.getElementById('ai-suggestions-wrap').classList.add('hidden');
-        document.getElementById('ai-result').textContent = (document.getElementById('ai-result').textContent || '') + '\n\n✓ ' + (data.added || 0) + ' uppgifter tillagda.';
-        loadTasks();
-      } catch (e) {
-        alert('Kunde inte lägga till: ' + (e.message || e));
-      }
-    });
+            <div class="toolbar">
+              <button class="btn btn-primary" id="btn-save-settings">Spara inställningar</button>
+              <span id="settings-saved" style="color:var(--success);font-size:0.85rem"></span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
 
-    loadTasks();
-  </script>
+  <!-- Mobile bottom nav -->
+  <nav class="mobile-nav">
+    <button class="nav-item active" data-page="home"><span class="nav-icon">🏠</span> Hem</button>
+    <button class="nav-item" data-page="maintenance"><span class="nav-icon">🔧</span> Underhåll</button>
+    <button class="nav-item" data-page="finance"><span class="nav-icon">💰</span> Ekonomi</button>
+    <button class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span> Mer</button>
+  </nav>
+
+  <!-- Modal -->
+  <div class="modal-backdrop" id="modal-backdrop">
+    <div class="modal">
+      <h2 id="modal-title">Modal</h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions" id="modal-actions">
+        <button class="btn" id="modal-close">Stäng</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

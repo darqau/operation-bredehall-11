@@ -35,3 +35,73 @@ class TaskResponse(TaskBase):
     updated_at: Optional[date] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TaskStats(BaseModel):
+    total: int
+    overdue: int
+    due_this_week: int
+    due_this_month: int
+    completed: int
+
+
+class FinanceTransactionResponse(BaseModel):
+    id: int
+    txn_date: date
+    amount: float
+    description: str
+    balance: Optional[float] = None
+    account: str
+    typ: str
+    category: str
+    currency: str
+    source_file: Optional[str] = None
+    is_manual: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FinanceManualCreate(BaseModel):
+    txn_date: date
+    amount: float
+    description: str = ""
+    account: str
+    balance: Optional[float] = None
+    category: Optional[str] = None
+    currency: str = "SEK"
+
+
+class FinanceConfigUpdate(BaseModel):
+    storage_mode: Optional[str] = None
+    folder_map: Optional[dict] = None
+    archive_folder_id: Optional[str] = None
+    gdrive_credentials_path: Optional[str] = None
+    own_accounts_regex: Optional[str] = None
+    csv_delimiter: Optional[str] = None
+    ai_enabled: Optional[bool] = None
+    ai_base_url: Optional[str] = None
+    ai_api_key: Optional[str] = None
+    ai_model: Optional[str] = None
+
+
+class FinanceProcessResult(BaseModel):
+    ok: bool
+    mode: str
+    files_processed: int
+    transactions_added: int
+    processed: list
+    errors: list
+
+
+class FinanceFolderCreate(BaseModel):
+    name: str
+    drive_folder_id: str = ""
+
+
+class FinanceUploadResult(BaseModel):
+    ok: bool
+    account: str
+    filename: str
+    auto_detected: bool
+    detection: Optional[dict] = None
+    process: Optional[FinanceProcessResult] = None

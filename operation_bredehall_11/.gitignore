@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+data/
+pip_install_log.txt
