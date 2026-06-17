@@ -4,9 +4,25 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.crud import create_task, delete_task, get_task, get_task_stats, get_tasks, mark_task_complete, update_task
+from app.crud import (
+    create_task,
+    delete_task,
+    get_task,
+    get_task_stats,
+    get_tasks,
+    list_completions,
+    mark_task_complete,
+    update_task,
+)
 from app.database import get_db
-from app.schemas import TaskCreate, TaskResponse, TaskStats, TaskUpdate
+from app.schemas import (
+    TaskCompleteRequest,
+    TaskCompletionResponse,
+    TaskCreate,
+    TaskResponse,
+    TaskStats,
+    TaskUpdate,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -14,6 +30,15 @@ router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 @router.get("/stats/summary", response_model=TaskStats)
 def task_stats(db: Session = Depends(get_db)):
     return get_task_stats(db)
+
+
+@router.get("/completions", response_model=List[TaskCompletionResponse])
+def task_completions(
+    search: Optional[str] = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+):
+    return list_completions(db, search=search, limit=limit)
 
 
 @router.get("", response_model=List[TaskResponse])
@@ -53,8 +78,19 @@ def update_task_endpoint(task_id: int, task: TaskUpdate, db: Session = Depends(g
 
 
 @router.post("/{task_id}/complete", response_model=TaskResponse)
-def complete_task(task_id: int, db: Session = Depends(get_db)):
-    updated = mark_task_complete(db, task_id)
+def complete_task(
+    task_id: int,
+    body: Optional[TaskCompleteRequest] = None,
+    db: Session = Depends(get_db),
+):
+    body = body or TaskCompleteRequest()
+    updated = mark_task_complete(
+        db,
+        task_id,
+        completed_by=body.completed_by,
+        note=body.note,
+        completed_on=body.completed_at,
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Uppgift hittades inte")
     return updated

@@ -25,6 +25,7 @@ def _base_query(
     date_to: Optional[date] = None,
     exclude_overforing: bool = False,
     search: Optional[str] = None,
+    max_amount: Optional[float] = None,
 ):
     q = db.query(FinanceTransaction)
     if account:
@@ -46,6 +47,8 @@ def _base_query(
             FinanceTransaction.txn_date >= date(year, 1, 1),
             FinanceTransaction.txn_date <= date(year, 12, 31),
         )
+    if max_amount and max_amount > 0:
+        q = q.filter(func.abs(FinanceTransaction.amount) <= max_amount)
     return q
 
 
@@ -77,6 +80,7 @@ def build_dashboard(
     date_to: Optional[date] = None,
     exclude_overforing: bool = False,
     search: Optional[str] = None,
+    max_amount: Optional[float] = None,
 ) -> Dict[str, Any]:
     # year=None means "all years" so charts span the full history (2023-2026 etc.)
     use_year = year
@@ -109,7 +113,7 @@ def build_dashboard(
     total_balance = sum(latest_balances.values())
 
     txns = _base_query(
-        db, account, category, typ, use_year, date_from, date_to, exclude_overforing, search
+        db, account, category, typ, use_year, date_from, date_to, exclude_overforing, search, max_amount
     ).order_by(FinanceTransaction.txn_date.asc()).all()
 
     monthly_expenses: Dict[str, float] = defaultdict(float)
@@ -155,6 +159,7 @@ def build_dashboard(
             "date_to": date_to.isoformat() if date_to else None,
             "exclude_overforing": exclude_overforing,
             "search": search,
+            "max_amount": max_amount,
         },
         "total_balance": round(total_balance, 2),
         "accounts": accounts,

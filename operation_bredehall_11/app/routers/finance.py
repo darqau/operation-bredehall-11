@@ -163,6 +163,7 @@ def dashboard(
     date_to: Optional[str] = None,
     exclude_overforing: bool = False,
     search: Optional[str] = None,
+    max_amount: Optional[float] = None,
     db: Session = Depends(get_db),
 ):
     return build_dashboard(
@@ -175,6 +176,7 @@ def dashboard(
         date_to=_parse_date(date_to),
         exclude_overforing=exclude_overforing,
         search=search or None,
+        max_amount=max_amount,
     )
 
 

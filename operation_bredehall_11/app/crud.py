@@ -1,10 +1,11 @@
 """CRUD för uppgifter + filtrering (nästa månad, kvartal, år)."""
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app.models import Task
+from app.models import Task, TaskCompletion
 from app.schemas import TaskCreate, TaskStats, TaskUpdate
 
 
@@ -112,17 +113,51 @@ def get_task_stats(db: Session) -> TaskStats:
     )
 
 
-def mark_task_complete(db: Session, task_id: int) -> Optional[Task]:
+def mark_task_complete(
+    db: Session,
+    task_id: int,
+    completed_by: str = "",
+    note: Optional[str] = None,
+    completed_on: Optional[date] = None,
+) -> Optional[Task]:
     db_task = get_task(db, task_id)
     if not db_task:
         return None
-    today = date.today()
-    db_task.last_done = today
-    db_task.next_deadline = compute_next_deadline(db_task.frequency, today)
-    db_task.updated_at = today
+    done_date = completed_on or date.today()
+    db_task.last_done = done_date
+    db_task.next_deadline = compute_next_deadline(db_task.frequency, done_date)
+    db_task.updated_at = date.today()
+
+    log = TaskCompletion(
+        task_id=db_task.id,
+        task_title=db_task.title,
+        category=db_task.category,
+        completed_by=(completed_by or "").strip() or "Okänd",
+        note=(note or "").strip() or None,
+        completed_at=datetime.combine(done_date, datetime.utcnow().time()),
+    )
+    db.add(log)
     db.commit()
     db.refresh(db_task)
     return db_task
+
+
+def list_completions(
+    db: Session,
+    search: Optional[str] = None,
+    limit: int = 200,
+) -> List[TaskCompletion]:
+    q = db.query(TaskCompletion).order_by(TaskCompletion.completed_at.desc())
+    if search:
+        term = f"%{search.strip()}%"
+        q = q.filter(
+            or_(
+                TaskCompletion.task_title.ilike(term),
+                TaskCompletion.completed_by.ilike(term),
+                TaskCompletion.note.ilike(term),
+            )
+        )
+    return q.limit(limit).all()
 
 
 def get_task(db: Session, task_id: int) -> Optional[Task]:

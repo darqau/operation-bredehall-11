@@ -16,7 +16,7 @@ let state = {
   financeFilters: {
     account: '', year: '', category: '', typ: '',
     dateFrom: '', dateTo: '', search: '',
-    excludeOverforing: true,
+    excludeOverforing: true, maxAmount: 0,
     sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50,
   },
   lastSuggestions: [],
@@ -121,6 +121,14 @@ async function loadHome() {
 // ── Maintenance ──────────────────────────────────────────────────────
 async function loadTasks() {
   const list = $('#task-list');
+  const log = $('#completion-log');
+  if (state.taskView === 'log') {
+    list.classList.add('hidden');
+    log.classList.remove('hidden');
+    return loadCompletionLog();
+  }
+  log.classList.add('hidden');
+  list.classList.remove('hidden');
   list.innerHTML = '<p class="loading">Laddar…</p>';
   try {
     let url = `/api/tasks?view=${state.taskView === 'all' ? '' : state.taskView}`;
@@ -147,6 +155,62 @@ async function loadTasks() {
   } catch (e) {
     list.innerHTML = `<p class="error">Kunde inte ladda: ${escapeHtml(e.message)}</p>`;
   }
+}
+
+function formatDateTime(iso) {
+  if (!iso) return '–';
+  const d = new Date(iso);
+  return d.toLocaleString('sv-SE', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+async function loadCompletionLog() {
+  const log = $('#completion-log');
+  log.innerHTML = '<p class="loading">Laddar logg…</p>';
+  try {
+    const url = '/api/tasks/completions' + (state.taskSearch ? '?search=' + encodeURIComponent(state.taskSearch) : '');
+    const items = await api(url);
+    if (!items.length) {
+      log.innerHTML = '<p class="empty">Inga avslutade uppgifter loggade än. Markera en uppgift som klar för att börja.</p>';
+      return;
+    }
+    log.innerHTML = items.map(c => `
+      <div class="log-item">
+        <div>
+          <p class="log-title">✓ ${escapeHtml(c.task_title)}</p>
+          <p class="log-meta">${c.category ? `<span class="badge">${escapeHtml(c.category)}</span> ` : ''}Utförd av <span class="log-who">${escapeHtml(c.completed_by)}</span>${c.note ? ` · ${escapeHtml(c.note)}` : ''}</p>
+        </div>
+        <span class="log-when">${formatDateTime(c.completed_at)}</span>
+      </div>`).join('');
+  } catch (e) {
+    log.innerHTML = `<p class="error">Kunde inte ladda logg: ${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function completeTaskFlow(task) {
+  const lastBy = localStorage.getItem('bredehall_last_completed_by') || '';
+  openModal(`
+    <p style="font-size:0.9rem;margin:0 0 1rem">Markera <strong>${escapeHtml(task.title)}</strong> som klar.</p>
+    <form id="complete-form">
+      <div class="field"><label class="label">Vem utförde den?</label><input class="input" name="completed_by" value="${escapeHtml(lastBy)}" placeholder="t.ex. Patrik" required></div>
+      <div class="field"><label class="label">Datum</label><input class="input" type="date" name="completed_at" value="${new Date().toISOString().slice(0,10)}"></div>
+      <div class="field"><label class="label">Anteckning (valfritt)</label><textarea class="textarea" name="note" rows="2" placeholder="t.ex. bytte filter, allt ok"></textarea></div>
+    </form>`,
+    'Markera som klar',
+    `<button class="btn" id="btn-cancel-complete">Avbryt</button>
+     <button class="btn btn-success" id="btn-confirm-complete">Spara</button>`
+  );
+  $('#btn-cancel-complete').onclick = closeModal;
+  $('#btn-confirm-complete').onclick = async () => {
+    const fd = new FormData($('#complete-form'));
+    const body = Object.fromEntries(fd.entries());
+    if (!body.completed_by?.trim()) return alert('Ange vem som utförde uppgiften');
+    localStorage.setItem('bredehall_last_completed_by', body.completed_by.trim());
+    body.completed_at = body.completed_at || null;
+    body.note = body.note?.trim() || null;
+    await api(`/api/tasks/${task.id}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    closeModal();
+    loadTasks();
+  };
 }
 
 function bindTaskFilters() {
@@ -213,10 +277,7 @@ function openTaskModal(task, edit = false) {
       await api(`/api/tasks/${task.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       closeModal(); loadTasks();
     };
-    $('#btn-complete-task').onclick = async () => {
-      await api(`/api/tasks/${task.id}/complete`, { method: 'POST' });
-      closeModal(); loadTasks();
-    };
+    $('#btn-complete-task').onclick = () => { closeModal(); completeTaskFlow(task); };
     $('#btn-delete-task').onclick = async () => {
       if (!confirm('Ta bort uppgift?')) return;
       await api(`/api/tasks/${task.id}`, { method: 'DELETE' });
@@ -238,10 +299,7 @@ function openTaskModal(task, edit = false) {
      <button class="btn btn-primary" id="btn-edit-task">Redigera</button>`
   );
   $('#btn-edit-task').onclick = () => openTaskModal(task, true);
-  $('#btn-quick-complete').onclick = async () => {
-    await api(`/api/tasks/${task.id}/complete`, { method: 'POST' });
-    closeModal(); loadTasks();
-  };
+  $('#btn-quick-complete').onclick = () => { closeModal(); completeTaskFlow(task); };
 }
 
 function openNewTaskModal() {
@@ -339,6 +397,7 @@ function financeQueryString(extra = {}) {
   if (f.dateTo) p.set('date_to', f.dateTo);
   if (f.search) p.set('search', f.search);
   if (f.excludeOverforing) p.set('exclude_overforing', 'true');
+  if (f.maxAmount) p.set('max_amount', String(f.maxAmount));
   if (f.sortBy) p.set('sort_by', f.sortBy);
   if (f.sortDir) p.set('sort_dir', f.sortDir);
   if (f.offset != null) p.set('offset', String(f.offset));
@@ -355,6 +414,7 @@ function readFinanceFiltersFromUI() {
   state.financeFilters.dateTo = $('#fin-filter-to')?.value || '';
   state.financeFilters.search = $('#fin-filter-search')?.value?.trim() || '';
   state.financeFilters.excludeOverforing = $('#fin-filter-no-transfer')?.checked ?? true;
+  state.financeFilters.maxAmount = $('#fin-filter-cap')?.checked ? 100000 : 0;
   state.financeFilters.offset = 0;
 }
 
@@ -390,10 +450,11 @@ async function loadFinance() {
     ]);
     state.financeDash = dash;
     state.financeMeta = meta;
+    state.financeFolders = foldersResp.folders || [];
     populateFinanceFilterDropdowns(meta);
-    renderFolderGrid(foldersResp.folders || []);
+    renderKnownAccounts(state.financeFolders);
     const d = state.financeDash;
-    const pending = (foldersResp.folders || []).reduce((s, f) => s + (f.pending_files || 0), 0);
+    const pending = state.financeFolders.reduce((s, f) => s + (f.pending_files || 0), 0);
     $('#finance-total').textContent = formatMoney(d.total_balance);
     $('#finance-txn-count').textContent = d.transaction_count;
     if (pending > 0) {
@@ -516,6 +577,15 @@ function renderFinanceCharts(d) {
       options: opts,
     });
   }
+
+  // Reset-zoom buttons + double-click to reset
+  $$('.chart-reset').forEach(btn => {
+    btn.onclick = () => state.charts[btn.dataset.chart]?.resetZoom?.();
+  });
+  ['net', 'incomeExpense', 'expenses'].forEach(key => {
+    const c = state.charts[key];
+    if (c?.canvas) c.canvas.ondblclick = () => c.resetZoom?.();
+  });
 }
 
 function chartOptions() {
@@ -529,6 +599,16 @@ function chartOptions() {
         callbacks: {
           label: (ctx) => `${ctx.dataset.label || ''}: ${formatMoney(ctx.parsed.y)}`,
         },
+      },
+      zoom: {
+        pan: { enabled: true, mode: 'x' },
+        zoom: {
+          wheel: { enabled: true },
+          pinch: { enabled: true },
+          drag: { enabled: false },
+          mode: 'x',
+        },
+        limits: { x: { minRange: 2 } },
       },
     },
     scales: {
@@ -612,11 +692,13 @@ $('#btn-recategorize-ai')?.addEventListener('click', () => recategorize('ai'));
 
 $('#fin-filter-apply')?.addEventListener('click', () => { readFinanceFiltersFromUI(); loadFinance(); });
 $('#fin-filter-reset')?.addEventListener('click', () => {
-  state.financeFilters = { account: '', year: '', category: '', typ: '', dateFrom: '', dateTo: '', search: '', excludeOverforing: true, sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50 };
+  state.financeFilters = { account: '', year: '', category: '', typ: '', dateFrom: '', dateTo: '', search: '', excludeOverforing: true, maxAmount: 0, sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50 };
   ['fin-filter-account','fin-filter-year','fin-filter-category','fin-filter-typ','fin-filter-from','fin-filter-to','fin-filter-search'].forEach(id => { const el = $('#' + id); if (el) el.value = ''; });
   if ($('#fin-filter-no-transfer')) $('#fin-filter-no-transfer').checked = true;
+  if ($('#fin-filter-cap')) $('#fin-filter-cap').checked = false;
   loadFinance();
 });
+$('#fin-filter-cap')?.addEventListener('change', () => { readFinanceFiltersFromUI(); loadFinance(); });
 $('#fin-filter-search')?.addEventListener('keydown', e => { if (e.key === 'Enter') { readFinanceFiltersFromUI(); loadFinance(); } });
 
 async function processBankFiles() {
@@ -662,33 +744,15 @@ $('#btn-manual-txn')?.addEventListener('click', openManualTxnModal);
 // ── Drop zone & file upload ───────────────────────────────────────────
 let uploadQueue = [];
 
-function renderFolderGrid(folders) {
-  const el = $('#folder-grid');
+function renderKnownAccounts(folders) {
+  const el = $('#known-accounts');
   if (!el) return;
-  if (!folders.length) {
-    el.innerHTML = '';
-    return;
-  }
-  el.innerHTML = folders.map(f =>
-    `<div class="folder-chip" data-account="${escapeHtml(f.name)}" title="Släpp fil här">
-      <strong>📁 ${escapeHtml(f.name)}</strong>
-      <span>${f.pending_files ? f.pending_files + ' fil(er) väntar' : 'Tom inbox'}</span>
-    </div>`
-  ).join('');
-  el.querySelectorAll('.folder-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      $('#file-input').dataset.targetAccount = chip.dataset.account;
-      $('#file-input').click();
-    });
-    chip.addEventListener('dragover', e => { e.preventDefault(); chip.style.borderColor = 'var(--accent-2)'; });
-    chip.addEventListener('dragleave', () => { chip.style.borderColor = ''; });
-    chip.addEventListener('drop', e => {
-      e.preventDefault();
-      e.stopPropagation();
-      chip.style.borderColor = '';
-      handleDroppedFiles(e.dataTransfer.files, chip.dataset.account);
-    });
-  });
+  const names = (folders || []).map(f => f.name);
+  if (!names.length) { el.innerHTML = ''; return; }
+  const pending = (folders || []).filter(f => f.pending_files > 0);
+  el.innerHTML =
+    'Kända konton: ' + names.map(n => `<span class="acc-tag">${escapeHtml(n)}</span>`).join('') +
+    (pending.length ? `<br><span style="color:var(--accent-warm)">${pending.reduce((s, f) => s + f.pending_files, 0)} fil(er) väntar på import</span>` : '');
 }
 
 function initDropZone() {
@@ -773,10 +837,12 @@ function openAccountPickerModal(file, detection, forcedAccount = null) {
         Fil: <strong>${escapeHtml(file.name)}</strong>
         ${detection.auto_detected ? `<br>Auto-detekterat: <strong>${escapeHtml(detection.detected_account)}</strong> (${Math.round(detection.confidence * 100)}%)` : '<br>Kunde inte avgöra konto automatiskt.'}
       </p>
+      <p class="label" style="margin:0 0 0.35rem">Välj befintligt konto:</p>
       <div class="account-pick-list" id="account-pick-list">${candidateBtns}</div>
+      <p class="label" style="margin:0.9rem 0 0.35rem">⚠️ Eller skapa ett <strong>nytt</strong> konto i appen:</p>
       <div class="create-folder-row">
         <input class="input" id="new-folder-name" placeholder="Nytt kontonamn…">
-        <button type="button" class="btn btn-sm" id="btn-create-folder-pick">Skapa</button>
+        <button type="button" class="btn btn-sm" id="btn-create-folder-pick">Skapa nytt</button>
       </div>
       <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.75rem;font-size:0.85rem;color:var(--text-muted)">
         <input type="checkbox" id="upload-auto-process" checked> Importera direkt efter uppladdning

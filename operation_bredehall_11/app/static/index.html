@@ -6,8 +6,10 @@
   <title>Operation Bredehall 11</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/app.css?v=3">
+  <link rel="stylesheet" href="/static/css/app.css?v=4">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 </head>
 <body>
   <div class="overlay-sidebar" id="sidebar-overlay"></div>
@@ -50,6 +52,7 @@
             <button class="chip task-view-chip" data-view="next_quarter">Kommande kvartal</button>
             <button class="chip task-view-chip" data-view="this_year">Hela året</button>
             <button class="chip task-view-chip" data-view="overdue">Försenade</button>
+            <button class="chip task-view-chip" data-view="log">✓ Avslutade</button>
           </div>
           <div class="toolbar">
             <input class="input" id="task-search" placeholder="Sök uppgift…" style="max-width:200px">
@@ -63,6 +66,7 @@
             <a class="btn" href="/api/calendar/ical" download="bredehall.ics">📅 Kalender</a>
           </div>
           <div id="task-list"></div>
+          <div id="completion-log" class="hidden"></div>
 
           <div class="card" style="margin-top:1.5rem">
             <h2 class="section-title">AI-assistent</h2>
@@ -114,6 +118,7 @@
             </div>
             <div class="toolbar">
               <label class="check-label"><input type="checkbox" id="fin-filter-no-transfer" checked> Dölj överföringar</label>
+              <label class="check-label"><input type="checkbox" id="fin-filter-cap"> Dölj stora engångsposter (&gt; 100 000 kr)</label>
               <button class="btn btn-sm" id="fin-filter-reset">Rensa filter</button>
               <button class="btn btn-sm btn-primary" id="fin-filter-apply">Uppdatera</button>
             </div>
@@ -125,18 +130,19 @@
             <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden>
             <div class="drop-zone-icon">📂</div>
             <p class="drop-zone-title">Släpp bank-CSV här</p>
-            <p class="drop-zone-sub">Auto-detekterar konto · annars väljer du mapp</p>
+            <p class="drop-zone-sub">Kontot identifieras automatiskt — annars frågar appen innan ett nytt konto skapas.</p>
             <button type="button" class="btn btn-sm" id="btn-browse-files">Välj fil</button>
+            <p class="drop-zone-accounts" id="known-accounts"></p>
           </div>
-          <div class="folder-grid" id="folder-grid"></div>
 
-          <div class="grid grid-2" style="margin:1rem 0">
+          <p class="chart-hint">💡 Scrolla för att zooma och dra för att panorera i tidslinjediagrammen. Dubbelklicka eller "↺" för att återställa.</p>
+          <div class="grid grid-2" style="margin:0.5rem 0 1rem">
             <div class="card">
-              <h3 class="section-title">Netto över tid</h3>
+              <div class="chart-head"><h3 class="section-title">Netto över tid</h3><button class="btn btn-sm chart-reset" data-chart="net" title="Återställ zoom">↺</button></div>
               <div class="chart-box chart-box-lg"><canvas id="chart-net"></canvas></div>
             </div>
             <div class="card">
-              <h3 class="section-title">Inkomst vs utgift per månad</h3>
+              <div class="chart-head"><h3 class="section-title">Inkomst vs utgift per månad</h3><button class="btn btn-sm chart-reset" data-chart="incomeExpense" title="Återställ zoom">↺</button></div>
               <div class="chart-box chart-box-lg"><canvas id="chart-income-expense"></canvas></div>
             </div>
           </div>
@@ -146,7 +152,7 @@
               <div class="chart-box chart-box-lg"><canvas id="chart-categories"></canvas></div>
             </div>
             <div class="card">
-              <h3 class="section-title">Månatliga utgifter</h3>
+              <div class="chart-head"><h3 class="section-title">Månatliga utgifter</h3><button class="btn btn-sm chart-reset" data-chart="expenses" title="Återställ zoom">↺</button></div>
               <div class="chart-box chart-box-lg"><canvas id="chart-expenses"></canvas></div>
             </div>
           </div>
@@ -234,6 +240,6 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=3"></script>
+  <script src="/static/js/app.js?v=4"></script>
 </body>
 </html>

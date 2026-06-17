@@ -1,5 +1,5 @@
 """Pydantic-schemas för API (request/response)."""
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -43,6 +43,24 @@ class TaskStats(BaseModel):
     due_this_week: int
     due_this_month: int
     completed: int
+
+
+class TaskCompleteRequest(BaseModel):
+    completed_by: str = ""
+    note: Optional[str] = None
+    completed_at: Optional[date] = None
+
+
+class TaskCompletionResponse(BaseModel):
+    id: int
+    task_id: Optional[int] = None
+    task_title: str
+    category: Optional[str] = None
+    completed_by: str
+    note: Optional[str] = None
+    completed_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FinanceTransactionResponse(BaseModel):

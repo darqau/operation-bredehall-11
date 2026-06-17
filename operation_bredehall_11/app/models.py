@@ -2,10 +2,10 @@
 Databasmodell för underhållsuppgifter.
 SQLite-tabellstruktur för Operation Bredehall 11.
 """
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import String, Text, Date, Integer, Float, Boolean, Index
+from sqlalchemy import String, Text, Date, DateTime, Integer, Float, Boolean, Index, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 import enum
 
@@ -61,6 +61,28 @@ class Task(Base):
 
     def __repr__(self) -> str:
         return f"<Task(id={self.id}, title={self.title!r}, category={self.category})>"
+
+
+class TaskCompletion(Base):
+    """Logg över avslutade uppgifter: vem som utförde och när."""
+    __tablename__ = "task_completions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    task_id: Mapped[Optional[int]] = mapped_column(
+        Integer, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    task_title: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    category: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    completed_by: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_completion_when", "completed_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TaskCompletion(task={self.task_title!r}, by={self.completed_by})>"
 
 
 class FinanceTransaction(Base):
