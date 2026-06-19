@@ -1,4 +1,5 @@
 """Finance API: import, dashboard, transactions, config."""
+import os
 from datetime import date
 from typing import List, Optional
 
@@ -49,12 +50,30 @@ from app.services.finance.upload import create_account_folder, save_upload_to_in
 
 router = APIRouter(prefix="/api/finance", tags=["finance"])
 
+_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+async def _read_upload_limited(file: UploadFile, max_bytes: int = _MAX_UPLOAD_BYTES) -> bytes:
+    raw = await file.read()
+    if len(raw) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Filen är för stor (max {max_bytes // (1024 * 1024)} MB).",
+        )
+    return raw
+
+
+def _require_ai_enabled(cfg: dict) -> None:
+    if not cfg.get("ai_enabled"):
+        raise HTTPException(status_code=403, detail="AI-kategorisering är avstängd i inställningarna.")
+
 
 @router.get("/config")
 def read_config():
     cfg = get_finance_config()
-    safe = {k: v for k, v in cfg.items() if k != "gdrive_credentials_path"}
+    safe = {k: v for k, v in cfg.items() if k not in ("gdrive_credentials_path", "ai_api_key")}
     safe["has_gdrive_credentials"] = bool(cfg.get("gdrive_credentials_path"))
+    safe["has_ai_api_key"] = bool((cfg.get("ai_api_key") or "").strip())
     return safe
 
 
@@ -62,6 +81,9 @@ def read_config():
 def update_config(body: FinanceConfigUpdate):
     cfg = get_finance_config()
     data = body.model_dump(exclude_unset=True)
+    ai_key = data.pop("ai_api_key", None)
+    if ai_key is not None and ai_key.strip() and ai_key.strip() != "__UNCHANGED__":
+        cfg["ai_api_key"] = ai_key.strip()
     cfg.update(data)
     return save_finance_config(cfg)
 
@@ -94,7 +116,7 @@ def add_folder(body: FinanceFolderCreate):
 
 @router.post("/detect")
 async def detect_upload(file: UploadFile = File(...)):
-    raw = await file.read()
+    raw = await _read_upload_limited(file)
     try:
         content = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -112,7 +134,7 @@ async def upload_csv(
     auto_process: bool = Form(True),
     db: Session = Depends(get_db),
 ):
-    raw = await file.read()
+    raw = await _read_upload_limited(file)
     filename = file.filename or "upload.csv"
     try:
         content = raw.decode("utf-8-sig")
@@ -186,7 +208,8 @@ def finance_hero(exclude_internal: bool = True, db: Session = Depends(get_db)):
 @router.post("/detect-transfers")
 def detect_transfers(db: Session = Depends(get_db)):
     """Re-scan all transactions and tag transfers between own accounts."""
-    changed = detect_internal_transfers(db)
+    cfg = get_finance_config()
+    changed = detect_internal_transfers(db, own_accounts_regex=cfg.get("own_accounts_regex") or "")
     return {"ok": True, "internal_transfers": changed}
 
 
@@ -270,8 +293,10 @@ def remove_transaction(txn_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Transaktion hittades inte")
 
 
-@router.delete("/transactions", status_code=200)
+@router.delete("/transactions", status_code=200, include_in_schema=False)
 def wipe_transactions(db: Session = Depends(get_db)):
+    if os.environ.get("ALLOW_WIPE") != "1":
+        raise HTTPException(status_code=404, detail="Not found")
     count = clear_all_transactions(db)
     return {"deleted": count}
 
@@ -285,10 +310,10 @@ def recategorize(
     cfg = get_finance_config()
     if method == "rules":
         changed = recategorize_rules(db, cfg.get("own_accounts_regex") or "", only_ovrigt=only_ovrigt)
-        internal = detect_internal_transfers(db)
+        internal = detect_internal_transfers(db, own_accounts_regex=cfg.get("own_accounts_regex") or "")
         return {"ok": True, "method": "rules", "changed": changed, "internal_transfers": internal}
 
-    # AI method
+    _require_ai_enabled(cfg)
     from app.services.finance.ai_finance import categorize_with_ai
 
     rows = get_uncategorized(db)
@@ -367,6 +392,7 @@ def ai_batch(
     from app.services.finance.ai_finance import categorize_batch
 
     cfg = get_finance_config()
+    _require_ai_enabled(cfg)
     rows = get_uncategorized(db, limit=limit, offset=0)
     # Always take from start — applied rows leave queue automatically
     if not rows:
@@ -407,7 +433,9 @@ def ai_apply(body: FinanceAiApplyRequest, db: Session = Depends(get_db)):
 def ai_test():
     from app.services.finance.ai_finance import test_connection
 
-    return test_connection(get_finance_config())
+    cfg = get_finance_config()
+    _require_ai_enabled(cfg)
+    return test_connection(cfg)
 
 
 def _loan_to_dict(loan) -> dict:
@@ -470,6 +498,7 @@ def loans_parse_text(body: FinanceLoanParseTextRequest):
     from app.services.finance.ai_finance import parse_loans_from_text
 
     cfg = get_finance_config()
+    _require_ai_enabled(cfg)
     return parse_loans_from_text(body.text, cfg)
 
 
@@ -477,7 +506,7 @@ def loans_parse_text(body: FinanceLoanParseTextRequest):
 async def loans_parse_image(file: UploadFile = File(...)):
     from app.services.finance.ai_finance import parse_loans_from_image
 
-    raw = await file.read()
+    raw = await _read_upload_limited(file)
     mime = file.content_type or "image/png"
     cfg = get_finance_config()
     return parse_loans_from_image(raw, mime, cfg)

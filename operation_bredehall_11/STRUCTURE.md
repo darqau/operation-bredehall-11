@@ -3,61 +3,40 @@
 ## Översikt
 
 ```
-Operation Bredehall/
-├── config.yaml              # Home Assistant add-on konfiguration
-├── Dockerfile               # Container-build för HA
-├── run.sh                   # Startscript (HA anropar detta)
-├── requirements.txt         # Python-beroenden
-├── STRUCTURE.md             # Denna fil
+operation_bredehall_11/
+├── config.yaml              # HA add-on (Ingress, port, app_api_key)
+├── Dockerfile
+├── run.sh                   # Start uvicorn, läser HA options
+├── requirements.txt
+├── requirements-dev.txt     # pytest, httpx
+├── README.md
+├── tests/                   # pytest-grundsuite
 │
 ├── app/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI-app, routes (Hello World → sen full API)
-│   ├── database.py          # SQLite-engine, session, init DB
-│   ├── models.py            # SQLAlchemy-modeller (Task m.fl.)
-│   ├── schemas.py           # Pydantic-modeller (API request/response) – Steg 2
-│   ├── crud.py              # CRUD för uppgifter – Steg 2
+│   ├── main.py              # FastAPI, auth middleware, startup migrationer
+│   ├── database.py          # SQLite + DATA_DIR
+│   ├── migrations.py        # Idempotenta ALTER TABLE + WAL
+│   ├── models.py            # Task, FinanceTransaction, FinanceLoan
+│   ├── schemas.py           # Pydantic API-modeller
+│   ├── crud.py              # Uppgifter
+│   ├── crud_finance.py      # Transaktioner, lån, dedup, överföringar
+│   ├── middleware/auth.py   # Valfri API-nyckel + Ingress-bypass
 │   │
-│   ├── routers/             # API-routes uppdelade
-│   │   ├── __init__.py
-│   │   ├── tasks.py         # GET/POST/PUT/DELETE uppgifter
-│   │   ├── filters.py      # Vyer: nästa månad, kvartal, år
-│   │   └── calendar.py     # Google Calendar-export/synk
-│   │
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── ai.py            # AI-assistent: analys + bidragssökning (OpenAI)
-│   │   └── calendar_sync.py # Google Calendar API-anrop
-│   │
-│   └── seed/                # Startdata för svensk villa
-│       ├── __init__.py
-│       └── seed_tasks.py    # Script som fyller DB med standarduppgifter
+│   ├── routers/             # tasks, finance, calendar, ai
+│   ├── services/finance/    # import, dashboard, AI, config
+│   ├── seed/
+│   └── static/              # SPA (index.html, app.js, vendor/)
 │
-├── frontend/                # (Steg 2) Statiska filer eller NiceGUI
-│   ├── index.html
-│   ├── static/
-│   └── ...
-│
-└── tests/                   # (Valfritt) Enhetstester
-    └── ...
+└── data/                    # Lokalt (gitignored): bredehall.db, finance_config.json
 ```
 
-## Steg 1 (nu)
+## Autentisering
 
-- **config.yaml**, **Dockerfile**, **run.sh** – så att add-on startar och visar "Hello World".
-- **app/database.py** – SQLite-setup, skapa tabeller.
-- **app/models.py** – Tabellstruktur för uppgifter (titel, kategori, frekvens, datum, motivering, instruktioner).
+- **Lokal dev:** ingen `APP_API_KEY` → öppen access
+- **HA direkt port / Tailscale:** sätt `app_api_key` i add-on options
+- **HA Ingress:** `X-Ingress-Path`-header → ingen extra nyckel
 
-## Steg 2 (nästa)
+## Data
 
-- **app/main.py** – Full FastAPI med routers, CORS, statisk frontend.
-- **app/schemas.py**, **app/crud.py**, **app/routers/** – backend-logik och filtrering (nästa månad, kvartal, år).
-- **frontend/** – Dashboard med Tailwind, vyer och uppgiftsdetaljer.
-
-## AI-modul (arkitektur)
-
-- **app/services/ai.py** anropas från **app/routers/** (t.ex. `routers/ai.py`).
-- **Endpoints:**
-  - `POST /api/ai/analyze-plan` – hämtar alla uppgifter från DB, skickar till LLM (OpenAI), returnerar analys + förslag. Frontend visar resultat och knapp "Lägg till förslag i databasen".
-  - `POST /api/ai/search-grants` – LLM söker/sammanställer info om svenska bidrag (ROT, energieffektivisering, etc.). API-nyckel/config i add-on (config.yaml eller env).
-- **Säkerhet:** API-nyckel lagras i HA add-on options, läsas som env i containern; anrop från frontend går via FastAPI så nyckeln aldrig exponeras.
+- `finance_config.json` i `/data` (HA) eller `operation_bredehall_11/data/` (lokalt)
+- Repot innehåller bara exempel-defaults — riktiga konton fylls i via UI

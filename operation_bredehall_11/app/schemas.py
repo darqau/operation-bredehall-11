@@ -1,8 +1,13 @@
 """Pydantic-schemas för API (request/response)."""
 from datetime import date, datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.models import TaskCategory, TaskFrequency
+
+_TASK_CATEGORIES = {c.value for c in TaskCategory}
+_TASK_FREQUENCIES = {f.value for f in TaskFrequency}
 
 
 class TaskBase(BaseModel):
@@ -16,7 +21,19 @@ class TaskBase(BaseModel):
 
 
 class TaskCreate(TaskBase):
-    pass
+    @field_validator("category")
+    @classmethod
+    def valid_category(cls, v: str) -> str:
+        if v not in _TASK_CATEGORIES:
+            raise ValueError(f"Ogiltig kategori. Tillåtna: {', '.join(sorted(_TASK_CATEGORIES))}")
+        return v
+
+    @field_validator("frequency")
+    @classmethod
+    def valid_frequency(cls, v: str) -> str:
+        if v not in _TASK_FREQUENCIES:
+            raise ValueError(f"Ogiltig frekvens. Tillåtna: {', '.join(sorted(_TASK_FREQUENCIES))}")
+        return v
 
 
 class TaskUpdate(BaseModel):

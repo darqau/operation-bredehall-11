@@ -13,14 +13,21 @@ startup: application
 boot: auto
 host_network: false
 
+ingress: true
+ingress_port: 8765
+panel_icon: mdi:home-analytics
+panel_title: Operation Bredehall
+
 options:
   port: 8765
+  app_api_key: ""
   openai_api_key: ""
   google_calendar_credentials: ""
   finance_storage_mode: "local"
 
 schema:
   port: port
+  app_api_key: password
   openai_api_key: str?
   google_calendar_credentials: str?
   finance_storage_mode: str?
@@ -33,4 +40,4 @@ ports:
   8765/tcp: 8765
 
 ports_description:
-  8765/tcp: "Webbgränssnitt för underhållsplaneraren"
+  8765/tcp: "Webbgränssnitt för underhållsplaneraren (kräver API-nyckel vid direkt åtkomst)"

@@ -107,7 +107,7 @@ def parse_bank_csv(content: str, delimiter: str | None = None) -> List[Dict[str,
     idx_amount = col("belopp")
     idx_sender = col("avsändare", ("avsandare",))
     idx_receiver = col("mottagare")
-    idx_desc = col("beskrivning", ("rubrik", "referens"))
+    idx_desc = col("beskrivning", ("rubrik", "referens", "text"))
     idx_balance = col("saldo", ("bokfört saldo", "bokfort saldo", "bokfört saldo"))
     idx_currency = col("valuta")
 

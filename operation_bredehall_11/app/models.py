@@ -102,6 +102,8 @@ class FinanceTransaction(Base):
     receiver: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     source_file: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     is_manual: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    category_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    amount_ore: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     __table_args__ = (
@@ -117,6 +119,7 @@ class FinanceLoan(Base):
     label: Mapped[str] = mapped_column(String(255), nullable=False, default="Bolån")
     account_number: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
+    amount_ore: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     typ: Mapped[str] = mapped_column(String(64), nullable=False, default="bolån")
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(

@@ -9,36 +9,27 @@ from typing import Any, Dict, Optional
 
 from app.database import DATA_DIR
 
-DEFAULT_FOLDER_MAP = {
-    "Gemensamt Nordea": "1U5W4QE7Bgk432FCoOBfWDKCQP7su1wuH",
-    "Lönekonto Nordea": "1r-ADjFekM97OzU9JM8Pr5tCx71BNBZe7",
-    "Lönekonto Swedbank": "19zsxBWloi-CgzL1nqO6OIk8WqWiYsU1O",
-    "Linneas CSN": "1soHvN6meUV6kuhAv-nesnp9rxgvmVK_q",
-    "Patriks Lönekonto": "1crlVTbYoZGn4zL44pNKz_Ghe2Y82kopL",
-    "Linneas Sparkonto": "1TIfPJkeyE386Q6yvsbo_GlLHASJGx0IT",
-    "Patriks Sparkonto": "",
-    "Räkningar Swedbank": "",
+# Example placeholders — fill in real values via Settings UI or finance_config.json.
+EXAMPLE_FOLDER_MAP: Dict[str, str] = {
+    "Gemensamt konto": "",
+    "Lönekonto": "",
+    "Sparkonto": "",
 }
 
-# Optional display numbers for bank accounts (shown next to kontonamn in UI).
-DEFAULT_ACCOUNT_NUMBERS: Dict[str, str] = {
-    "Gemensamt Nordea": "1936 20 14939",
-    "Lönekonto Nordea": "920117-1221",
-    "Lönekonto Swedbank": "9735695422",
-    "Linneas CSN": "3100 22 43645",
-    "Patriks Lönekonto": "1127 21 36671",
-    "Linneas Sparkonto": "3055 01 01268",
+EXAMPLE_ACCOUNT_NUMBERS: Dict[str, str] = {
+    "Gemensamt konto": "1234 56 78901",
+    "Lönekonto": "9876543210",
+    "Sparkonto": "1234 56 78999",
 }
 
 DEFAULT_CONFIG: Dict[str, Any] = {
     "storage_mode": "local",
-    "folder_map": DEFAULT_FOLDER_MAP,
-    "account_numbers": DEFAULT_ACCOUNT_NUMBERS,
-    "archive_folder_id": "1NR3ch3fIpfNDVfwGOhNs30OgYsWGLsZa",
+    "folder_map": dict(EXAMPLE_FOLDER_MAP),
+    "account_numbers": dict(EXAMPLE_ACCOUNT_NUMBERS),
+    "archive_folder_id": "",
     "gdrive_credentials_path": "",
-    "own_accounts_regex": r"1936|920117|3300|1127|3055|3100|Personkonto",
+    "own_accounts_regex": r"Personkonto|Sparkonto|Lönekonto",
     "csv_delimiter": ";",
-    # Optional AI categorizer (LM Studio / OpenAI-compatible). Off by default.
     "ai_enabled": False,
     "ai_base_url": "http://localhost:1234/v1",
     "ai_api_key": "lm-studio",
@@ -53,6 +44,33 @@ FINANCE_ARCHIVE = DATA_DIR / "finance" / "archive"
 def _ensure_dirs() -> None:
     FINANCE_INBOX.mkdir(parents=True, exist_ok=True)
     FINANCE_ARCHIVE.mkdir(parents=True, exist_ok=True)
+
+
+def _read_ha_options() -> Dict[str, Any]:
+    for path in ("/data/options.json", "/config/options.json"):
+        p = Path(path)
+        if not p.is_file():
+            continue
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return {}
+
+
+def sync_ha_options() -> None:
+    """Apply Home Assistant add-on options to finance_config.json when unset."""
+    opts = _read_ha_options()
+    if not opts:
+        return
+    cfg = get_finance_config()
+    changed = False
+    mode = (opts.get("finance_storage_mode") or "").strip()
+    if mode and not CONFIG_PATH.exists():
+        cfg["storage_mode"] = mode
+        changed = True
+    if changed:
+        save_finance_config(cfg)
 
 
 def migrate_legacy_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,20 +91,19 @@ def migrate_legacy_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def merge_default_folders(folder_map: Dict[str, str]) -> Dict[str, str]:
-    """Add missing default accounts without overwriting existing Drive IDs."""
+    """Add missing example account names without overwriting user Drive IDs."""
     merged = dict(folder_map)
-    for name, default_id in DEFAULT_FOLDER_MAP.items():
+    for name in EXAMPLE_FOLDER_MAP:
         if name not in merged:
-            merged[name] = default_id
-        elif not merged[name] and default_id:
-            merged[name] = default_id
+            merged[name] = EXAMPLE_FOLDER_MAP[name]
     return merged
 
 
 def merge_default_account_numbers(account_numbers: Dict[str, str]) -> Dict[str, str]:
-    """Keep user overrides; fill in defaults for known accounts."""
-    merged = dict(DEFAULT_ACCOUNT_NUMBERS)
-    merged.update({k: (v or "").strip() for k, v in account_numbers.items() if k})
+    merged = dict(account_numbers)
+    for name, default in EXAMPLE_ACCOUNT_NUMBERS.items():
+        if name not in merged:
+            merged[name] = default
     return merged
 
 
@@ -113,17 +130,17 @@ def get_finance_config() -> Dict[str, Any]:
             if "folder_map" in stored:
                 merged["folder_map"] = merge_default_folders(stored["folder_map"])
             else:
-                merged["folder_map"] = merge_default_folders(DEFAULT_FOLDER_MAP)
+                merged["folder_map"] = merge_default_folders(dict(EXAMPLE_FOLDER_MAP))
             if "account_numbers" in stored:
                 merged["account_numbers"] = merge_default_account_numbers(stored["account_numbers"])
             else:
-                merged["account_numbers"] = merge_default_account_numbers(DEFAULT_ACCOUNT_NUMBERS)
+                merged["account_numbers"] = merge_default_account_numbers(dict(EXAMPLE_ACCOUNT_NUMBERS))
             ensure_all_inbox_folders(merged["folder_map"])
             return merged
         except (json.JSONDecodeError, OSError):
             pass
     cfg = deepcopy(DEFAULT_CONFIG)
-    cfg["folder_map"] = merge_default_folders(DEFAULT_FOLDER_MAP)
+    cfg["folder_map"] = merge_default_folders(dict(EXAMPLE_FOLDER_MAP))
     save_finance_config(cfg)
     return cfg
 

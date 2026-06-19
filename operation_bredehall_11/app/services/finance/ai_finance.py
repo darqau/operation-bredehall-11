@@ -75,6 +75,8 @@ def categorize_batch(
     Returns {ok, mapping, skipped, errors, preview}
     """
     settings = get_ai_settings(config)
+    if not settings["enabled"]:
+        return {"ok": False, "mapping": {}, "skipped": [], "errors": ["AI-kategorisering är avstängd."], "preview": []}
     client = _get_client(settings)
     if client is None:
         return {"ok": False, "mapping": {}, "skipped": [], "errors": ["AI-klient ej tillgänglig."], "preview": []}

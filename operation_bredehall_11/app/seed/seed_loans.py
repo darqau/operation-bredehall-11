@@ -1,21 +1,21 @@
-"""Seed initial bolån if finance_loans table is empty."""
+"""Seed demo bolån only when explicitly requested."""
 from __future__ import annotations
+
+import os
 
 from sqlalchemy import text
 
 from app.crud_finance import create_loan
 from app.database import SessionLocal, engine, init_db
 
-
-DEFAULT_LOANS = [
-    {"label": "Bolån Nordea", "account_number": "3993 65 18128", "amount": 1352200.0, "typ": "bolån"},
-    {"label": "Bolån Nordea", "account_number": "3993 65 18136", "amount": 1352200.0, "typ": "bolån"},
-    {"label": "Bolån Nordea", "account_number": "3993 65 18144", "amount": 586500.0, "typ": "bolån"},
-    {"label": "Bolån Nordea", "account_number": "3993 65 18152", "amount": 586500.0, "typ": "bolån"},
+DEMO_LOANS = [
+    {"label": "Bolån (exempel)", "account_number": "3993 65 00001", "amount": 1_000_000.0, "typ": "bolån"},
 ]
 
 
 def seed_loans_if_empty() -> None:
+    if os.environ.get("SEED_DEMO_LOANS") != "1":
+        return
     init_db()
     with engine.connect() as conn:
         try:
@@ -27,7 +27,7 @@ def seed_loans_if_empty() -> None:
 
     db = SessionLocal()
     try:
-        for row in DEFAULT_LOANS:
+        for row in DEMO_LOANS:
             create_loan(db, row)
     finally:
         db.close()

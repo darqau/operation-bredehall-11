@@ -46,6 +46,35 @@ def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
     return idx // 12, idx % 12 + 1
 
 
+def _latest_balance_per_account(db: Session) -> Dict[str, float]:
+    """Latest bank-reported balance per account (tie-break: highest id on max date)."""
+    subq = (
+        db.query(
+            FinanceTransaction.account,
+            func.max(FinanceTransaction.txn_date).label("max_date"),
+        )
+        .group_by(FinanceTransaction.account)
+        .subquery()
+    )
+    bal_rows = (
+        db.query(FinanceTransaction)
+        .join(
+            subq,
+            (FinanceTransaction.account == subq.c.account)
+            & (FinanceTransaction.txn_date == subq.c.max_date),
+        )
+        .order_by(FinanceTransaction.account.asc(), FinanceTransaction.id.desc())
+        .all()
+    )
+    latest: Dict[str, float] = {}
+    for r in bal_rows:
+        if r.account in latest:
+            continue
+        if r.balance is not None:
+            latest[r.account] = r.balance
+    return latest
+
+
 def _months_ago(d: date, months: int) -> date:
     """Same day-of-month roughly `months` back, clamped to a valid day."""
     y, m = _shift_month(d.year, d.month, -months)
@@ -80,7 +109,10 @@ def _base_query(
     if exclude_overforing:
         q = q.filter(FinanceTransaction.typ != "Överföring")
     if search:
-        q = q.filter(FinanceTransaction.description.ilike(f"%{search.strip()}%"))
+        from app.crud_finance import escape_like
+
+        escaped = escape_like(search.strip())
+        q = q.filter(FinanceTransaction.description.ilike(f"%{escaped}%", escape="\\"))
     if date_from:
         q = q.filter(FinanceTransaction.txn_date >= date_from)
     if date_to:
@@ -140,28 +172,7 @@ def build_dashboard(
         return account_number_for(name, cfg)
 
     # Balances: always all accounts (unfiltered) for overview
-    latest_balances: Dict[str, float] = {}
-    subq = (
-        db.query(
-            FinanceTransaction.account,
-            func.max(FinanceTransaction.txn_date).label("max_date"),
-        )
-        .group_by(FinanceTransaction.account)
-        .subquery()
-    )
-    bal_rows = (
-        db.query(FinanceTransaction)
-        .join(
-            subq,
-            (FinanceTransaction.account == subq.c.account)
-            & (FinanceTransaction.txn_date == subq.c.max_date),
-        )
-        .order_by(FinanceTransaction.account)
-        .all()
-    )
-    for r in bal_rows:
-        if r.balance is not None:
-            latest_balances[r.account] = r.balance
+    latest_balances = _latest_balance_per_account(db)
 
     accounts = [
         {"name": n, "balance": b, "account_number": _num(n)}
@@ -326,27 +337,7 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
     expense and net figures when ``exclude_internal`` is True (the default).
     """
     # ── Current total assets (latest balance per account) ───────────────
-    subq = (
-        db.query(
-            FinanceTransaction.account,
-            func.max(FinanceTransaction.txn_date).label("max_date"),
-        )
-        .group_by(FinanceTransaction.account)
-        .subquery()
-    )
-    bal_rows = (
-        db.query(FinanceTransaction)
-        .join(
-            subq,
-            (FinanceTransaction.account == subq.c.account)
-            & (FinanceTransaction.txn_date == subq.c.max_date),
-        )
-        .all()
-    )
-    latest_balances: Dict[str, float] = {}
-    for r in bal_rows:
-        if r.balance is not None:
-            latest_balances[r.account] = r.balance
+    latest_balances = _latest_balance_per_account(db)
     total_assets = round(sum(latest_balances.values()), 2)
 
     loans = db.query(FinanceLoan).order_by(FinanceLoan.account_number.asc()).all()
@@ -407,8 +398,16 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
         max_date = max(t.txn_date for t in txns)
         month_since = _months_ago(max_date, 1)
         year_since = _months_ago(max_date, 12)
-        month_label = f"{month_since.isoformat()} → {max_date.isoformat()}"
-        year_label = f"{year_since.isoformat()} → {max_date.isoformat()}"
+        month_label = f"Senaste 30 dagarna ({month_since.isoformat()} → {max_date.isoformat()})"
+        year_label = f"Senaste 12 mån ({year_since.isoformat()} → {max_date.isoformat()})"
+
+    cfg = get_finance_config()
+    recent_rows = (
+        db.query(FinanceTransaction)
+        .order_by(FinanceTransaction.txn_date.desc(), FinanceTransaction.id.desc())
+        .limit(5)
+        .all()
+    )
 
     return {
         "total_assets": total_assets,
@@ -432,4 +431,17 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
         "month_label": month_label,
         "year_label": year_label,
         "exclude_internal": exclude_internal,
+        "recent_transactions": [
+            {
+                "id": t.id,
+                "txn_date": t.txn_date.isoformat(),
+                "description": t.description,
+                "amount": t.amount,
+                "account": t.account,
+                "account_number": account_number_for(t.account, cfg),
+                "typ": t.typ,
+                "category": t.category,
+            }
+            for t in recent_rows
+        ],
     }

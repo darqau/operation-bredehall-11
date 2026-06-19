@@ -1,6 +1,8 @@
 """CRUD for finance transactions."""
 from __future__ import annotations
 
+import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime
 from typing import List, Optional
@@ -10,28 +12,47 @@ from sqlalchemy.orm import Session
 
 from app.models import FinanceLoan, FinanceTransaction
 
+logger = logging.getLogger(__name__)
+
+
+def escape_like(term: str) -> str:
+    """Escape SQL LIKE wildcards in user search input."""
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def amount_to_ore(amount: float) -> int:
+    return int(round(float(amount) * 100))
+
+
+def ore_to_amount(ore: Optional[int], fallback: float) -> float:
+    if ore is not None:
+        return round(ore / 100.0, 2)
+    return round(float(fallback), 2)
+
 
 def transaction_fingerprint(
     account: str,
     txn_date: date,
     amount: float,
     description: str,
+    amount_ore: Optional[int] = None,
 ) -> tuple:
-    """Stable identity for a bank transaction on one account.
-
-    Overlapping CSV exports from the same bank repeat the same rows; matching
-    on account + date + amount + normalised description is enough to skip them.
-    """
+    """Stable identity for a bank transaction on one account."""
     desc = " ".join((description or "").split()).casefold()
-    return (account, txn_date, round(float(amount), 2), desc)
+    ore = amount_ore if amount_ore is not None else amount_to_ore(amount)
+    return (account, txn_date, ore, desc)
 
 
 def _fingerprint_from_row(row: dict) -> tuple:
+    ore = row.get("amount_ore")
+    if ore is None and "amount" in row:
+        ore = amount_to_ore(row["amount"])
     return transaction_fingerprint(
         row["account"],
         row["txn_date"],
         row["amount"],
         row.get("description") or "",
+        amount_ore=ore,
     )
 
 
@@ -41,6 +62,7 @@ def _fingerprint_from_model(txn: FinanceTransaction) -> tuple:
         txn.txn_date,
         txn.amount,
         txn.description,
+        amount_ore=txn.amount_ore,
     )
 
 
@@ -65,7 +87,8 @@ def _apply_txn_filters(q, *, account=None, category=None, typ=None, year=None,
     if exclude_overforing:
         q = q.filter(FinanceTransaction.typ != "Överföring")
     if search:
-        q = q.filter(FinanceTransaction.description.ilike(f"%{search.strip()}%"))
+        escaped = escape_like(search.strip())
+        q = q.filter(FinanceTransaction.description.ilike(f"%{escaped}%", escape="\\"))
     if date_from:
         q = q.filter(FinanceTransaction.txn_date >= date_from)
     if date_to:
@@ -81,9 +104,13 @@ def _apply_txn_filters(q, *, account=None, category=None, typ=None, year=None,
 
 
 def create_transaction(db: Session, row: dict) -> FinanceTransaction:
+    ore = row.get("amount_ore")
+    if ore is None:
+        ore = amount_to_ore(row["amount"])
     txn = FinanceTransaction(
         txn_date=row["txn_date"],
         amount=row["amount"],
+        amount_ore=ore,
         description=row.get("description") or "",
         balance=row.get("balance"),
         account=row["account"],
@@ -94,6 +121,7 @@ def create_transaction(db: Session, row: dict) -> FinanceTransaction:
         receiver=row.get("receiver"),
         source_file=row.get("source_file"),
         is_manual=bool(row.get("is_manual", False)),
+        category_locked=bool(row.get("category_locked", False)),
         created_at=date.today(),
     )
     db.add(txn)
@@ -114,11 +142,13 @@ def create_transactions_bulk(db: Session, rows: List[dict]) -> dict:
     skipped = 0
 
     for r in rows:
+        ore = amount_to_ore(r["amount"])
         if r.get("is_manual"):
             objects.append(
                 FinanceTransaction(
                     txn_date=r["txn_date"],
                     amount=r["amount"],
+                    amount_ore=ore,
                     description=r.get("description") or "",
                     balance=r.get("balance"),
                     account=r["account"],
@@ -143,6 +173,7 @@ def create_transactions_bulk(db: Session, rows: List[dict]) -> dict:
             FinanceTransaction(
                 txn_date=r["txn_date"],
                 amount=r["amount"],
+                amount_ore=ore,
                 description=r.get("description") or "",
                 balance=r.get("balance"),
                 account=r["account"],
@@ -243,7 +274,7 @@ def recategorize_rules(db: Session, own_accounts_regex: str, only_ovrigt: bool =
         q = q.filter(FinanceTransaction.category == "Övrigt")
     changed = 0
     for t in q.all():
-        if t.is_manual:
+        if t.is_manual or getattr(t, "category_locked", False):
             continue
         new_typ = classify_typ(t.amount, t.description, t.sender, t.receiver, own_accounts_regex)
         new_cat = categorize(t.description, new_typ, amount=t.amount)
@@ -255,7 +286,18 @@ def recategorize_rules(db: Session, own_accounts_regex: str, only_ovrigt: bool =
     return changed
 
 
-def detect_internal_transfers(db: Session, date_window_days: int = 3) -> int:
+def _transfer_text_signal(txn: FinanceTransaction, own_regex: str) -> bool:
+    desc = (txn.description or "").casefold()
+    if any(k in desc for k in ("överf", "omsättning", "oms lån", "spar", "sparkonto")):
+        return True
+    if own_regex:
+        for field in (txn.sender, txn.receiver, txn.description):
+            if field and re.search(own_regex, field, re.IGNORECASE):
+                return True
+    return False
+
+
+def detect_internal_transfers(db: Session, date_window_days: int = 3, own_accounts_regex: str = "") -> int:
     """Mark transactions that move money between two of our own accounts as
     internal transfers ("Överföring").
 
@@ -307,6 +349,15 @@ def detect_internal_transfers(db: Session, date_window_days: int = 3) -> int:
         if best is None:
             continue
 
+        if not (_transfer_text_signal(debit, own_accounts_regex) or _transfer_text_signal(best, own_accounts_regex)):
+            logger.debug(
+                "Skipped uncertain transfer pair: %s / %s amount %s",
+                debit.id,
+                best.id,
+                key,
+            )
+            continue
+
         used_credit_ids.add(best.id)
         for leg in (debit, best):
             if leg.typ != "Överföring" or leg.category != "Överföring":
@@ -342,6 +393,7 @@ def update_transaction_category(db: Session, txn_id: int, category: str) -> Opti
     if not t:
         return None
     t.category = category.strip()
+    t.category_locked = True
     db.commit()
     db.refresh(t)
     return t
@@ -379,7 +431,7 @@ def apply_category_mapping(db: Session, mapping: dict) -> dict:
         if not cat or cat == "Övrigt":
             continue
         t = db.query(FinanceTransaction).filter(FinanceTransaction.id == int(tid)).first()
-        if t and t.category != cat:
+        if t and not getattr(t, "category_locked", False) and t.category != cat:
             t.category = cat
             changed += 1
             by_category[cat] = by_category.get(cat, 0) + 1
@@ -403,10 +455,12 @@ def get_loan_by_account(db: Session, account_number: str) -> Optional[FinanceLoa
 
 
 def create_loan(db: Session, row: dict) -> FinanceLoan:
+    amt = float(row["amount"])
     loan = FinanceLoan(
         label=(row.get("label") or "Bolån").strip(),
         account_number=(row["account_number"] or "").strip(),
-        amount=float(row["amount"]),
+        amount=amt,
+        amount_ore=amount_to_ore(amt),
         typ=(row.get("typ") or "bolån").strip(),
         notes=(row.get("notes") or None),
         updated_at=datetime.utcnow(),
@@ -427,6 +481,7 @@ def update_loan(db: Session, loan_id: int, row: dict) -> Optional[FinanceLoan]:
         loan.account_number = row["account_number"].strip()
     if "amount" in row and row["amount"] is not None:
         loan.amount = float(row["amount"])
+        loan.amount_ore = amount_to_ore(loan.amount)
     if "typ" in row and row["typ"] is not None:
         loan.typ = row["typ"].strip()
     if "notes" in row:

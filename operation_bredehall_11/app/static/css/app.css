@@ -966,3 +966,12 @@ th.sortable.sorted-desc::after { content: ' ↓'; }
 .cat-stat-row { display: flex; justify-content: space-between; align-items: center; padding: 0.4rem 0.5rem; border-radius: 8px; background: rgba(0,0,0,0.15); font-size: 0.8rem; }
 .cat-stat-row .cat-name { font-weight: 600; }
 .cat-stat-row .cat-meta { color: var(--text-muted); font-size: 0.75rem; }
+
+.app-toast {
+  position: fixed; bottom: 1.25rem; left: 50%; transform: translateX(-50%);
+  background: var(--surface-2, #1e2433); color: var(--text, #eee);
+  padding: 0.65rem 1rem; border-radius: 10px; font-size: 0.85rem;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35); z-index: 9999; max-width: 90vw;
+}
+.app-toast.hidden { display: none; }
+.app-toast.error { border: 1px solid #f87171; }

@@ -85,8 +85,10 @@ def get_tasks(
     if category:
         q = q.filter(Task.category == category)
     if search:
-        term = f"%{search.strip()}%"
-        q = q.filter(Task.title.ilike(term))
+        from app.crud_finance import escape_like
+
+        term = f"%{escape_like(search.strip())}%"
+        q = q.filter(Task.title.ilike(term, escape="\\"))
 
     return q.all()
 
@@ -149,12 +151,14 @@ def list_completions(
 ) -> List[TaskCompletion]:
     q = db.query(TaskCompletion).order_by(TaskCompletion.completed_at.desc())
     if search:
-        term = f"%{search.strip()}%"
+        from app.crud_finance import escape_like
+
+        term = f"%{escape_like(search.strip())}%"
         q = q.filter(
             or_(
-                TaskCompletion.task_title.ilike(term),
-                TaskCompletion.completed_by.ilike(term),
-                TaskCompletion.note.ilike(term),
+                TaskCompletion.task_title.ilike(term, escape="\\"),
+                TaskCompletion.completed_by.ilike(term, escape="\\"),
+                TaskCompletion.note.ilike(term, escape="\\"),
             )
         )
     return q.limit(limit).all()
@@ -166,12 +170,15 @@ def get_task(db: Session, task_id: int) -> Optional[Task]:
 
 def create_task(db: Session, task: TaskCreate) -> Task:
     today = date.today()
+    next_deadline = task.next_deadline
+    if not next_deadline and task.frequency and task.frequency != "En gång":
+        next_deadline = compute_next_deadline(task.frequency, today)
     db_task = Task(
         title=task.title,
         category=task.category,
         frequency=task.frequency,
         last_done=task.last_done,
-        next_deadline=task.next_deadline,
+        next_deadline=next_deadline,
         reason=task.reason,
         description=task.description,
         created_at=today,

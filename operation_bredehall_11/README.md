@@ -1,52 +1,57 @@
 # Operation Bredehall 11
 
-Smart underhållsplanerare för villan – Custom Add-on för Home Assistant (t.ex. HA Green).
+Smart underhållsplanerare och privatekonomi för villan — Custom Add-on för Home Assistant.
 
----
+## Öppna appen
 
-### Öppna appen (webbgränssnitt)
+| Väg | URL | Auth |
+|-----|-----|------|
+| **Home Assistant Ingress** | Sidebar → Operation Bredehall | HA-inloggning |
+| **Direkt port (LAN/Tailscale)** | `http://<host>:8765` | API-nyckel (`app_api_key` i addon-config) |
 
-**[→ Öppna Operation Bredehall 11](http://homeassistant.local:8765)** (port 8765)
-
-*Fungerar när add-onen körs. Använd din HA-IP istället för `homeassistant.local` om länken inte öppnas, t.ex. `http://192.168.x.x:8765`.*
-
----
-
-## Steg 1 – Hello World
-
-### Filstruktur
-
-Se **STRUCTURE.md** för full översikt. Kärnan nu:
-
-- `config.yaml` – Add-on metadata och options
-- `Dockerfile` – Container-build
-- `run.sh` – Startkommando (uvicorn)
-- `app/main.py` – FastAPI-app (Hello World + DB-init)
-- `app/database.py` – SQLite-setup
-- `app/models.py` – Tabellmodell `Task`
-
-### Installation som Custom Add-on på Home Assistant
-
-1. Kopiera hela projektmappen till din HA-add-on-katalog, t.ex.:
-   - **HA OS/Supervisor:** Lägg add-on i en repo som du lägger till under **Add-ons → Add-on store → Repositories**, eller använd **Samba share** och placera mappen under `/addons/` (beroende på hur du kör custom add-ons).
-   - Vanligt sätt: skapa ett eget repo med struktur `repo/addon_slug/config.yaml`, `Dockerfile`, `run.sh` etc., och lägg till repot i HA.
-2. Efter att repot är tillagt: **Add-ons → Operation Bredehall 11 → Install → Start**.
-3. Öppna webbgränssnittet (dashboard med uppgifter och vyer):
-
-   **[→ Öppna Operation Bredehall 11 (port 8765)](http://homeassistant.local:8765)**
-
-   *Om länken inte fungerar, öppna manuellt:* `http://homeassistant.local:8765` — eller använd din HA-IP, t.ex. `http://192.168.x.x:8765`.
-
-### Testa lokalt (utan Docker/HA)
+Lokal utveckling utan API-nyckel:
 
 ```bash
-cd "c:\AI\Projects\Operation Bredehall"
+cd operation_bredehall_11
 pip install -r requirements.txt
-python -m uvicorn app.main:app --reload --port 8765
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 ```
 
-Öppna http://localhost:8765 – samma Hello World-meddelande. Databasen skapas under `data/bredehall.db` (lokalt).
+Öppna http://127.0.0.1:8890 — ingen nyckel krävs om `APP_API_KEY` inte är satt.
 
-### Nästa steg
+## Säkerhet
 
-När Steg 1 fungerar: backend (CRUD, filtrering), frontend (dashboard) och sedan seed-data + Google Calendar + AI-modul.
+- Sätt **`app_api_key`** i add-on options vid exponering via Tailscale eller öppen port.
+- Webbläsaren sparar nyckeln i `sessionStorage` (fält under Inställningar).
+- Via **Ingress** behövs ingen separat nyckel — Home Assistant autentiserar redan.
+- Mass-radering av transaktioner (`DELETE /api/finance/transactions`) är borttagen; dev-wipe kräver `ALLOW_WIPE=1`.
+
+## Funktioner
+
+- Underhållsuppgifter med vyer, deadline och `.ics`-export
+- Ekonomi: CSV-import, kategorisering (regler + valfri lokal AI), grafer, bolån/skulder
+- Kategorisida med inline-redigering
+
+## Konfiguration
+
+- **`data/finance_config.json`** — konton, Drive-ID, AI-inställningar (persisteras mellan omstarter)
+- **`finance_storage_mode`** i HA-options synkas vid första start
+- Fyll i kontonummer och mappar via **Inställningar** — inga personuppgifter i repots defaults
+
+## Tester
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+## Installation som HA add-on
+
+1. Lägg till repot under **Add-ons → Add-on store → Repositories**
+2. **Install → Start**
+3. Valfritt: sätt `app_api_key` under add-on **Configuration**
+4. Öppna via sidebar (Ingress) eller port 8765
+
+Se **STRUCTURE.md** för filöversikt.
+
+**Obs:** Tidigare versioner av repot innehöll hårdkodade kontonummer i defaults. Befintlig `finance_config.json` på din dator påverkas inte.

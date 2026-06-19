@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import shutil
-from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -31,8 +30,9 @@ def _read_csv_text(path: Path) -> str:
 
 def _rows_from_csv(content: str, account: str, filename: str, config: Dict[str, Any]) -> List[dict]:
     own_regex = config.get("own_accounts_regex") or ""
+    delimiter = config.get("csv_delimiter") or ";"
     rows = []
-    for parsed in parse_bank_csv(content):
+    for parsed in parse_bank_csv(content, delimiter=delimiter):
         row = {
             **parsed,
             "account": account,
@@ -44,9 +44,25 @@ def _rows_from_csv(content: str, account: str, filename: str, config: Dict[str, 
     return rows
 
 
+def _archive_target(path: Path, account: str) -> Path:
+    dest = FINANCE_ARCHIVE / account
+    dest.mkdir(parents=True, exist_ok=True)
+    target = dest / path.name
+    if not target.exists():
+        return target
+    stem = path.stem
+    suffix = path.suffix
+    n = 1
+    while target.exists():
+        target = dest / f"{stem}_{n}{suffix}"
+        n += 1
+    return target
+
+
 def process_local_folders(db: Session, config: Dict[str, Any]) -> Dict[str, Any]:
     folder_map = config.get("folder_map") or {}
     all_rows: List[dict] = []
+    pending_moves: List[Tuple[str, str, Path, Path]] = []
     processed: List[str] = []
     errors: List[str] = []
 
@@ -58,22 +74,29 @@ def process_local_folders(db: Session, config: Dict[str, Any]) -> Dict[str, Any]
                 rows = _rows_from_csv(content, account, path.name, config)
                 if rows:
                     all_rows.extend(rows)
-                    dest = FINANCE_ARCHIVE / account
-                    dest.mkdir(parents=True, exist_ok=True)
-                    target = dest / path.name
-                    if target.exists():
-                        stem = path.stem
-                        suffix = path.suffix
-                        n = 1
-                        while target.exists():
-                            target = dest / f"{stem}_{n}{suffix}"
-                            n += 1
-                    shutil.move(str(path), str(target))
-                    processed.append(f"{account}/{path.name}")
+                    pending_moves.append((account, path.name, path, _archive_target(path, account)))
             except Exception as e:
                 errors.append(f"{account}/{path.name}: {e}")
 
-    bulk = create_transactions_bulk(db, all_rows) if all_rows else {"added": 0, "skipped": 0}
+    bulk = {"added": 0, "skipped": 0}
+    if all_rows:
+        try:
+            bulk = create_transactions_bulk(db, all_rows)
+            for account, filename, src, dst in pending_moves:
+                shutil.move(str(src), str(dst))
+                processed.append(f"{account}/{filename}")
+        except Exception as e:
+            errors.append(f"DB-import misslyckades, filer lämnades i inbox: {e}")
+            return {
+                "ok": False,
+                "mode": "local",
+                "files_processed": 0,
+                "transactions_added": 0,
+                "transactions_skipped": 0,
+                "processed": [],
+                "errors": errors,
+            }
+
     return {
         "ok": True,
         "mode": "local",
@@ -115,11 +138,14 @@ def process_bank_files(db: Session) -> Dict[str, Any]:
     else:
         result = process_local_folders(db, config)
 
-    # Newly imported rows may pair with existing ones across own accounts.
     if result.get("transactions_added"):
         from app.crud_finance import detect_internal_transfers
+        from app.services.finance.config import get_finance_config
 
-        result["internal_transfers"] = detect_internal_transfers(db)
+        cfg = get_finance_config()
+        result["internal_transfers"] = detect_internal_transfers(
+            db, own_accounts_regex=cfg.get("own_accounts_regex") or ""
+        )
     return result
 
 

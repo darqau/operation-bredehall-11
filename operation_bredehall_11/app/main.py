@@ -2,6 +2,7 @@
 FastAPI-app för Operation Bredehall 11.
 Dashboard, CRUD för uppgifter, filtrering (nästa månad/kvartal/år).
 """
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -9,13 +10,17 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.database import init_db
+from app.database import engine, init_db
+from app.middleware.auth import ApiKeyMiddleware
+from app.migrations import run_migrations
 from app.routers import finance as finance_router
 from app.routers import tasks as tasks_router
 from app.routers import calendar as calendar_router
 from app.routers import ai as ai_router
 from app.seed.seed_tasks import seed_if_empty
 from app.seed.seed_loans import seed_loans_if_empty
+
+logger = logging.getLogger(__name__)
 
 
 def _migrate_finance_on_startup() -> None:
@@ -40,11 +45,16 @@ def _migrate_finance_on_startup() -> None:
     else:
         get_finance_config()
 
+    from app.services.finance.config import sync_ha_options
+
+    sync_ha_options()
+
     db = SessionLocal()
     try:
         migrate_patrik_lonekonto_transactions(db)
         migrate_house_purchase_duplicates(db)
     except Exception:
+        logger.exception("Finance data migration failed")
         db.rollback()
     finally:
         db.close()
@@ -58,6 +68,7 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 async def lifespan(app: FastAPI):
     """Vid start: skapa tabeller, seed om tom, märk interna överföringar."""
     init_db()
+    run_migrations(engine)
     seed_if_empty()
     seed_loans_if_empty()
     _migrate_finance_on_startup()
@@ -71,12 +82,14 @@ def _tag_internal_transfers_on_startup() -> None:
     run on every boot."""
     from app.crud_finance import detect_internal_transfers
     from app.database import SessionLocal
+    from app.services.finance.config import get_finance_config
 
+    cfg = get_finance_config()
     db = SessionLocal()
     try:
-        detect_internal_transfers(db)
+        detect_internal_transfers(db, own_accounts_regex=cfg.get("own_accounts_regex") or "")
     except Exception:
-        # Never block startup on a best-effort backfill.
+        logger.exception("Internal transfer backfill failed")
         db.rollback()
     finally:
         db.close()
@@ -87,6 +100,7 @@ app = FastAPI(
     description="Smart underhållsplanerare och ekonomi för villan",
     lifespan=lifespan,
 )
+app.add_middleware(ApiKeyMiddleware)
 
 app.include_router(finance_router.router)
 app.include_router(tasks_router.router)
@@ -109,3 +123,11 @@ def root():
 @app.get("/health", response_class=PlainTextResponse)
 def health():
     return "ok"
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    from app.middleware.auth import get_app_api_key
+
+    key = get_app_api_key()
+    return {"auth_required": bool(key)}

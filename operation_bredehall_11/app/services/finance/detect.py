@@ -2,49 +2,14 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.finance.csv_parser import parse_bank_csv
 
-# Account numbers / patterns → folder (most specific first)
-ACCOUNT_NUMBER_MAP: List[tuple[str, str]] = [
-    (r"1936\s*20\s*14939", "Gemensamt Nordea"),
-    (r"920117[- ]?1221", "Lönekonto Nordea"),
-    (r"9735695422", "Lönekonto Swedbank"),
-    (r"3100\s*22\s*43645", "Linneas CSN"),
-    (r"3100\s*22\s*43661", "Linneas CSN"),
-    (r"1127\s*21\s*36671", "Patriks Lönekonto"),
-    (r"3055\s*01\s*01268", "Linneas Sparkonto"),
-    (r"3300", "Lönekonto Swedbank"),
-]
-
-# Human-readable account numbers for UI (account name → display number)
-ACCOUNT_DISPLAY_NUMBERS: Dict[str, str] = {
-    "Gemensamt Nordea": "1936 20 14939",
-    "Lönekonto Nordea": "920117-1221",
-    "Lönekonto Swedbank": "9735695422",
-    "Linneas CSN": "3100 22 43645",
-    "Patriks Lönekonto": "1127 21 36671",
-    "Linneas Sparkonto": "3055 01 01268",
-}
-
-
-def account_display_number(name: str) -> Optional[str]:
-    """Display number for a configured bank account (from finance_config.json)."""
-    from app.services.finance.config import account_number_for
-
-    num = account_number_for(name)
-    return num or ACCOUNT_DISPLAY_NUMBERS.get(name) or None
-
 ACCOUNT_HINTS: Dict[str, List[str]] = {
-    "Gemensamt Nordea": [r"gemensamt", r"1936\s*20", r"personkonto.*1936", r"1936.*personkonto"],
-    "Lönekonto Nordea": [r"lönekonto.*nordea", r"nordea.*lön", r"920117"],
-    "Lönekonto Swedbank": [r"lönekonto.*swed", r"swedbank.*lön", r"9735695422", r"transaktioner"],
-    "Linneas CSN": [r"linnea.*csn", r"sparkonto.*3100", r"3100\s*22"],
-    "Patriks Lönekonto": [r"patriks?\s*löne", r"patrik.*lönekonto", r"1127\s*21\s*36671", r"\b1127\b"],
-    "Linneas Sparkonto": [r"linnea.*spar", r"linneas\s*spark", r"3055"],
-    "Patriks Sparkonto": [r"patrik.*spar", r"patriks\s*spar"],
-    "Räkningar Swedbank": [r"räkning", r"rakning", r"swedbank.*räk", r"faktura"],
+    "Gemensamt konto": [r"gemensamt", r"personkonto"],
+    "Lönekonto": [r"lönekonto", r"lön"],
+    "Sparkonto": [r"sparkonto", r"spar"],
 }
 
 BANK_HINTS = {
@@ -85,11 +50,24 @@ def _score_text(text: str, account: str, hints: List[str]) -> Tuple[float, List[
 
 
 def _match_account_numbers(text: str, accounts: List[str]) -> Optional[tuple[str, float, List[str]]]:
-    norm = text
-    for pattern, account in ACCOUNT_NUMBER_MAP:
-        if re.search(pattern, norm, re.IGNORECASE):
-            return account, 0.85, [f"kontonummer: {pattern}"]
+    from app.services.finance.config import get_finance_config
+
+    numbers = get_finance_config().get("account_numbers") or {}
+    for account in accounts:
+        num = (numbers.get(account) or "").strip()
+        if not num or len(num) < 4:
+            continue
+        pattern = re.escape(num).replace(r"\ ", r"\s*")
+        if re.search(pattern, text, re.IGNORECASE):
+            return account, 0.85, [f"kontonummer: {num}"]
     return None
+
+
+def account_display_number(name: str) -> Optional[str]:
+    from app.services.finance.config import account_number_for
+
+    num = account_number_for(name)
+    return num or None
 
 
 def detect_account(
@@ -97,9 +75,7 @@ def detect_account(
     content: str,
     accounts: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    Return detection result with suggested account and ranked candidates.
-    """
+    """Return detection result with suggested account and ranked candidates."""
     accounts = accounts or list(ACCOUNT_HINTS.keys())
     combined = f"{filename}\n{content[:8000]}"
 
@@ -118,15 +94,13 @@ def detect_account(
 
     candidates: List[Dict[str, Any]] = []
     for account in accounts:
-        hints = ACCOUNT_HINTS.get(account, [])
-        # Also derive hints from account name tokens
+        hints = list(ACCOUNT_HINTS.get(account, []))
         tokens = [re.escape(t) for t in re.split(r"\s+", account) if len(t) > 3]
-        hints = hints + [rf"\b{t}\b" for t in tokens]
+        hints.extend(rf"\b{t}\b" for t in tokens)
 
         file_score, file_reasons = _score_text(filename, account, hints)
         body_score, body_reasons = _score_text(content[:4000], account, hints)
 
-        # Parsed CSV: boost if valid bank export
         csv_score = 0.0
         csv_reasons: List[str] = []
         try:

@@ -6,10 +6,10 @@
   <title>Operation Bredehall 11</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/app.css?v=16">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+  <link rel="stylesheet" href="/static/css/app.css?v=17">
+  <script src="/static/vendor/chart.umd.min.js"></script>
+  <script src="/static/vendor/hammer.min.js"></script>
+  <script src="/static/vendor/chartjs-plugin-zoom.min.js"></script>
 </head>
 <body>
   <div class="overlay-sidebar" id="sidebar-overlay"></div>
@@ -304,6 +304,7 @@
               Använd en lokal AI via LM Studio för att kategorisera kvarvarande "Övrigt"-poster.
               Reglerna körs alltid först; AI är bara ett komplement. Starta LM Studio, ladda en modell och starta servern (Local Server).
             </p>
+            <div class="field"><label class="label">App API-nyckel (Tailscale/direkt port)</label><input class="input" id="cfg-app-api-key" type="password" autocomplete="off" placeholder="Samma som app_api_key i Home Assistant"></div>
             <label class="check-label" style="margin-bottom:0.75rem"><input type="checkbox" id="cfg-ai-enabled"> Aktivera AI-kategorisering</label>
             <div class="field"><label class="label">AI base URL</label><input class="input" id="cfg-ai-url" placeholder="http://localhost:1234/v1"></div>
             <div class="field"><label class="label">API-nyckel (godtycklig för LM Studio)</label><input class="input" id="cfg-ai-key" placeholder="lm-studio"></div>
@@ -379,6 +380,6 @@
     </div>
   </aside>
 
-  <script src="/static/js/app.js?v=16"></script>
+  <script src="/static/js/app.js?v=17"></script>
 </body>
 </html>

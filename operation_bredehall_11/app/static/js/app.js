@@ -132,14 +132,80 @@ function chartAccountLabel(item) {
   return formatAccountText(name, item?.account_number);
 }
 
+function getApiKey() {
+  return sessionStorage.getItem('bredehall_api_key') || '';
+}
+
+function setApiKey(key) {
+  if (key) sessionStorage.setItem('bredehall_api_key', key);
+  else sessionStorage.removeItem('bredehall_api_key');
+}
+
+async function ensureApiKey() {
+  const status = await fetch(API + '/api/auth/status').then(r => r.json()).catch(() => ({ auth_required: false }));
+  if (!status.auth_required) return true;
+  if (getApiKey()) return true;
+  const key = prompt('API-nyckel krävs (sätt app_api_key i Home Assistant eller APP_API_KEY lokalt):');
+  if (!key) return false;
+  setApiKey(key.trim());
+  return true;
+}
+
+function showToast(msg, isError = false) {
+  let el = $('#app-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-toast';
+    el.className = 'app-toast hidden';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.toggle('error', isError);
+  el.classList.remove('hidden');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.add('hidden'), 5000);
+}
+
 async function api(path, opts = {}) {
-  const r = await fetch(API + path, { cache: 'no-store', ...opts });
+  if (!(await ensureApiKey())) throw new Error('API-nyckel saknas');
+  const headers = { ...(opts.headers || {}) };
+  const key = getApiKey();
+  if (key) headers['X-API-Key'] = key;
+  const r = await fetch(API + path, { cache: 'no-store', ...opts, headers });
+  if (r.status === 401) {
+    setApiKey('');
+    if (await ensureApiKey()) return api(path, opts);
+    throw new Error('401 Ogiltig API-nyckel');
+  }
   if (!r.ok) {
     const t = await r.text();
     throw new Error(r.status + ' ' + (t || r.statusText));
   }
   if (r.status === 204) return null;
   return r.json();
+}
+
+/** api() with user-visible error toast */
+async function apiCall(path, opts = {}, errEl = null) {
+  try {
+    return await api(path, opts);
+  } catch (e) {
+    const msg = e.message || String(e);
+    if (errEl) errEl.textContent = msg;
+    else showToast(msg, true);
+    throw e;
+  }
+}
+
+function updateAiUiState() {
+  const enabled = !!state.financeConfig?.ai_enabled;
+  ['#btn-recategorize-ai', '#btn-loan-import'].forEach(sel => {
+    const el = $(sel);
+    if (el) {
+      el.disabled = !enabled;
+      el.title = enabled ? el.dataset.titleDefault || el.title : 'AI är avstängd i inställningar';
+    }
+  });
 }
 
 // ── Navigation ───────────────────────────────────────────────────────
@@ -185,18 +251,18 @@ $('#sidebar-overlay')?.addEventListener('click', () => {
 // ── Home ─────────────────────────────────────────────────────────────
 async function loadHome() {
   try {
-    const [stats, fin] = await Promise.all([
+    const [stats, hero] = await Promise.all([
       api('/api/tasks/stats/summary'),
-      api('/api/finance/dashboard'),
+      api('/api/finance/hero'),
     ]);
     state.stats = stats;
-    state.financeDash = fin;
+    state.financeHero = hero;
     $('#home-stats').innerHTML = `
       <div class="card"><div class="stat-value stat-accent">${stats.total}</div><div class="stat-label">Uppgifter totalt</div></div>
       <div class="card"><div class="stat-value stat-danger">${stats.overdue}</div><div class="stat-label">Försenade</div></div>
       <div class="card"><div class="stat-value stat-warn">${stats.due_this_week}</div><div class="stat-label">Denna vecka</div></div>
-      <div class="card"><div class="stat-value stat-success">${formatMoney(fin.total_balance)}</div><div class="stat-label">Totalt saldo</div></div>`;
-    const recent = fin.recent_transactions?.slice(0, 5) || [];
+      <div class="card"><div class="stat-value stat-success">${formatMoney(hero.total_assets)}</div><div class="stat-label">Tillgångar</div></div>`;
+    const recent = hero.recent_transactions || [];
     $('#home-recent-finance').innerHTML = recent.length
       ? recent.map(t => `<div class="task-item" style="cursor:default">
           <div><p class="task-title">${escapeHtml(t.description)}</p>
@@ -453,7 +519,9 @@ async function runGrants() {
   $('#ai-suggestions-wrap').classList.add('hidden');
   try {
     const data = await api('/api/ai/search-grants', { method: 'POST' });
-    el.textContent = data.ok ? (data.text || '') : ('Fel: ' + data.error);
+    el.innerHTML = data.ok
+      ? `<p class="ai-disclaimer" style="font-size:0.75rem;color:var(--text-muted);margin-bottom:0.5rem">⚠ AI-genererat svar — verifiera mot officiella källor (Boverket, Skatteverket m.fl.)</p><div>${escapeHtml(data.text || '')}</div>`
+      : ('Fel: ' + escapeHtml(data.error || ''));
   } catch (e) { el.textContent = 'Fel: ' + e.message; }
 }
 
@@ -555,8 +623,10 @@ async function loadFinance() {
 
   const failures = [];
 
-  if (cfgR.status === 'fulfilled') state.financeConfig = cfgR.value;
-  else failures.push('konfiguration');
+  if (cfgR.status === 'fulfilled') {
+    state.financeConfig = cfgR.value;
+    updateAiUiState();
+  } else failures.push('konfiguration');
 
   // Meta drives the filter dropdowns — populate even if other calls failed.
   if (metaR.status === 'fulfilled') {
@@ -1708,8 +1778,18 @@ async function loadSettings() {
     $('#cfg-gdrive-path').value = cfg.gdrive_credentials_path || '';
     if ($('#cfg-ai-enabled')) $('#cfg-ai-enabled').checked = !!cfg.ai_enabled;
     if ($('#cfg-ai-url')) $('#cfg-ai-url').value = cfg.ai_base_url || '';
-    if ($('#cfg-ai-key')) $('#cfg-ai-key').value = cfg.ai_api_key || '';
+    const aiKeyEl = $('#cfg-ai-key');
+    if (aiKeyEl) {
+      aiKeyEl.value = '';
+      aiKeyEl.placeholder = cfg.has_ai_api_key ? 'Nyckel sparad — lämna tom för att behålla' : 'lm-studio';
+    }
     if ($('#cfg-ai-model')) $('#cfg-ai-model').value = cfg.ai_model || '';
+    const appKeyEl = $('#cfg-app-api-key');
+    if (appKeyEl) {
+      appKeyEl.value = getApiKey();
+      appKeyEl.placeholder = 'Lagras i webbläsaren (sessionStorage)';
+    }
+    updateAiUiState();
     const mapEl = $('#folder-map-editor');
     const entries = Object.entries(cfg.folder_map || {});
     const numbers = cfg.account_numbers || {};
@@ -1749,11 +1829,13 @@ async function saveSettings() {
     gdrive_credentials_path: $('#cfg-gdrive-path').value.trim(),
     ai_enabled: $('#cfg-ai-enabled')?.checked ?? false,
     ai_base_url: $('#cfg-ai-url')?.value.trim() || '',
-    ai_api_key: $('#cfg-ai-key')?.value.trim() || '',
     ai_model: $('#cfg-ai-model')?.value.trim() || '',
     folder_map,
     account_numbers,
   };
+  const aiKey = $('#cfg-ai-key')?.value.trim();
+  if (aiKey) body.ai_api_key = aiKey;
+  setApiKey($('#cfg-app-api-key')?.value.trim() || '');
   await api('/api/finance/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   $('#settings-saved').textContent = 'Sparat ✓';
   setTimeout(() => $('#settings-saved').textContent = '', 2000);
