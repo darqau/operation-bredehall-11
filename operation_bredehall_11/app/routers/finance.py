@@ -7,24 +7,42 @@ from sqlalchemy.orm import Session
 
 from app.crud_finance import (
     apply_category_mapping,
+    category_stats,
     clear_all_transactions,
     count_transactions,
+    count_uncategorized,
+    create_loan,
+    delete_loan,
     delete_transaction,
+    detect_internal_transfers,
     get_uncategorized,
+    list_loans,
     list_transactions,
     recategorize_rules,
+    sum_loans,
+    update_loan,
+    update_transaction_category,
+    upsert_loans,
 )
 from app.database import get_db
 from app.schemas import (
+    FinanceAiApplyRequest,
+    FinanceCategoryUpdate,
     FinanceConfigUpdate,
     FinanceFolderCreate,
+    FinanceLoanCreate,
+    FinanceLoanParseTextRequest,
+    FinanceLoanResponse,
+    FinanceLoanUpdate,
+    FinanceLoanUpsertRequest,
     FinanceManualCreate,
     FinanceProcessResult,
     FinanceTransactionResponse,
     FinanceUploadResult,
 )
+from app.services.finance.categorizer import CATEGORIES
 from app.services.finance.config import FINANCE_INBOX, get_finance_config, save_finance_config
-from app.services.finance.dashboard import build_dashboard, build_meta
+from app.services.finance.dashboard import build_dashboard, build_hero, build_meta
 from app.services.finance.detect import detect_account
 from app.services.finance.processor import process_bank_files
 from app.services.finance.upload import create_account_folder, save_upload_to_inbox
@@ -56,7 +74,13 @@ def list_folders():
     for name in sorted(folder_map.keys()):
         inbox = FINANCE_INBOX / name
         pending = len(list(inbox.glob("*.csv"))) if inbox.is_dir() else 0
-        folders.append({"name": name, "drive_folder_id": folder_map[name], "pending_files": pending})
+        account_numbers = cfg.get("account_numbers") or {}
+        folders.append({
+            "name": name,
+            "account_number": (account_numbers.get(name) or "").strip(),
+            "drive_folder_id": folder_map[name],
+            "pending_files": pending,
+        })
     return {"folders": folders, "archive": str(cfg.get("archive_folder_id", ""))}
 
 
@@ -116,7 +140,8 @@ async def upload_csv(
 
     if chosen not in accounts:
         create_account_folder(chosen)
-        accounts.append(chosen)
+        cfg = get_finance_config()
+        accounts = list((cfg.get("folder_map") or {}).keys())
 
     saved = save_upload_to_inbox(chosen, filename, raw)
     process_result = None
@@ -153,6 +178,18 @@ def finance_meta(db: Session = Depends(get_db)):
     return build_meta(db)
 
 
+@router.get("/hero")
+def finance_hero(exclude_internal: bool = True, db: Session = Depends(get_db)):
+    return build_hero(db, exclude_internal=exclude_internal)
+
+
+@router.post("/detect-transfers")
+def detect_transfers(db: Session = Depends(get_db)):
+    """Re-scan all transactions and tag transfers between own accounts."""
+    changed = detect_internal_transfers(db)
+    return {"ok": True, "internal_transfers": changed}
+
+
 @router.get("/dashboard")
 def dashboard(
     year: Optional[int] = None,
@@ -164,6 +201,7 @@ def dashboard(
     exclude_overforing: bool = False,
     search: Optional[str] = None,
     max_amount: Optional[float] = None,
+    chart_max_amount: Optional[float] = 100000,
     db: Session = Depends(get_db),
 ):
     return build_dashboard(
@@ -177,6 +215,7 @@ def dashboard(
         exclude_overforing=exclude_overforing,
         search=search or None,
         max_amount=max_amount,
+        chart_max_amount=chart_max_amount,
     )
 
 
@@ -190,6 +229,7 @@ def transactions(
     date_to: Optional[str] = None,
     search: Optional[str] = None,
     exclude_overforing: bool = False,
+    max_amount: Optional[float] = None,
     sort_by: str = Query("txn_date", pattern="^(txn_date|amount|description|account|category)$"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     limit: int = Query(100, ge=1, le=500),
@@ -200,6 +240,7 @@ def transactions(
     filters = dict(
         account=account, category=category, typ=typ, year=year,
         date_from=df, date_to=dt, search=search, exclude_overforing=exclude_overforing,
+        max_amount=max_amount,
     )
     items = list_transactions(db, sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset, **filters)
     total = count_transactions(db, **filters)
@@ -244,7 +285,8 @@ def recategorize(
     cfg = get_finance_config()
     if method == "rules":
         changed = recategorize_rules(db, cfg.get("own_accounts_regex") or "", only_ovrigt=only_ovrigt)
-        return {"ok": True, "method": "rules", "changed": changed}
+        internal = detect_internal_transfers(db)
+        return {"ok": True, "method": "rules", "changed": changed, "internal_transfers": internal}
 
     # AI method
     from app.services.finance.ai_finance import categorize_with_ai
@@ -257,15 +299,107 @@ def recategorize(
         for t in rows
     ]
     result = categorize_with_ai(payload, cfg)
-    if not result["ok"]:
+    if not result["ok"] and not result.get("mapping"):
         raise HTTPException(status_code=502, detail={"message": "AI-kategorisering misslyckades", "errors": result.get("errors")})
-    changed = apply_category_mapping(db, result["mapping"])
+    apply_result = apply_category_mapping(db, result["mapping"])
     return {
         "ok": True,
         "method": "ai",
-        "changed": changed,
+        "changed": apply_result["changed"],
+        "by_category": apply_result["by_category"],
         "processed": result.get("used", 0),
+        "skipped_uncertain": result.get("skipped", 0),
         "errors": result.get("errors", []),
+    }
+
+
+@router.get("/categories")
+def list_categories():
+    return {"categories": CATEGORIES}
+
+
+@router.get("/categories/stats")
+def categories_stats(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    expenses_only: bool = True,
+    db: Session = Depends(get_db),
+):
+    return {
+        "year": year,
+        "month": month,
+        "items": category_stats(db, year=year, month=month, expenses_only=expenses_only),
+    }
+
+
+@router.patch("/transactions/{txn_id}/category", response_model=FinanceTransactionResponse)
+def patch_transaction_category(
+    txn_id: int,
+    body: FinanceCategoryUpdate,
+    db: Session = Depends(get_db),
+):
+    if body.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"Ogiltig kategori. Välj en av: {', '.join(CATEGORIES)}")
+    updated = update_transaction_category(db, txn_id, body.category)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Transaktion hittades inte")
+    return updated
+
+
+@router.get("/ai/queue")
+def ai_queue(db: Session = Depends(get_db)):
+    total = count_uncategorized(db)
+    preview = get_uncategorized(db, limit=5, offset=0)
+    return {
+        "total": total,
+        "preview": [
+            {"id": t.id, "description": t.description, "amount": t.amount, "txn_date": t.txn_date.isoformat()}
+            for t in preview
+        ],
+    }
+
+
+@router.post("/ai/batch")
+def ai_batch(
+    limit: int = Query(15, ge=1, le=30),
+    db: Session = Depends(get_db),
+):
+    from app.services.finance.ai_finance import categorize_batch
+
+    cfg = get_finance_config()
+    rows = get_uncategorized(db, limit=limit, offset=0)
+    # Always take from start — applied rows leave queue automatically
+    if not rows:
+        return {"ok": True, "done": True, "remaining": 0, "mapping": {}, "preview": [], "errors": []}
+
+    payload = [{"id": t.id, "description": t.description, "amount": t.amount, "typ": t.typ} for t in rows]
+    result = categorize_batch(payload, cfg)
+    apply_result = {"changed": 0, "by_category": {}}
+    if result.get("mapping"):
+        apply_result = apply_category_mapping(db, result["mapping"])
+    remaining = count_uncategorized(db)
+    return {
+        "ok": result["ok"],
+        "done": remaining == 0 and result["ok"],
+        "remaining": remaining,
+        "batch_size": len(payload),
+        "changed": apply_result["changed"],
+        "by_category": apply_result["by_category"],
+        "skipped_uncertain": result.get("skipped", []),
+        "preview": result.get("preview", []),
+        "current": payload[0]["description"][:80] if payload else "",
+        "errors": result.get("errors", []),
+    }
+
+
+@router.post("/ai/apply")
+def ai_apply(body: FinanceAiApplyRequest, db: Session = Depends(get_db)):
+    apply_result = apply_category_mapping(db, body.mapping)
+    return {
+        "ok": True,
+        "changed": apply_result["changed"],
+        "by_category": apply_result["by_category"],
+        "remaining": count_uncategorized(db),
     }
 
 
@@ -274,3 +408,94 @@ def ai_test():
     from app.services.finance.ai_finance import test_connection
 
     return test_connection(get_finance_config())
+
+
+def _loan_to_dict(loan) -> dict:
+    return {
+        "id": loan.id,
+        "label": loan.label,
+        "account_number": loan.account_number,
+        "amount": round(loan.amount, 2),
+        "typ": loan.typ,
+        "notes": loan.notes,
+        "updated_at": loan.updated_at.isoformat() if loan.updated_at else None,
+    }
+
+
+@router.get("/loans")
+def loans_list(db: Session = Depends(get_db)):
+    items = list_loans(db)
+    total = sum_loans(db)
+    return {
+        "total_debt": total,
+        "count": len(items),
+        "items": [_loan_to_dict(l) for l in items],
+    }
+
+
+@router.post("/loans", response_model=FinanceLoanResponse, status_code=201)
+def loans_create(body: FinanceLoanCreate, db: Session = Depends(get_db)):
+    from app.models import FinanceLoan
+
+    account = body.account_number.strip()
+    if not account:
+        raise HTTPException(status_code=400, detail="Kontonummer krävs.")
+    if body.amount <= 0:
+        raise HTTPException(status_code=400, detail="Belopp måste vara positivt.")
+    existing = db.query(FinanceLoan).filter(FinanceLoan.account_number == account).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Lån med detta kontonummer finns redan.")
+    return create_loan(db, body.model_dump())
+
+
+@router.put("/loans/{loan_id}", response_model=FinanceLoanResponse)
+def loans_update(loan_id: int, body: FinanceLoanUpdate, db: Session = Depends(get_db)):
+    data = body.model_dump(exclude_unset=True)
+    if "amount" in data and data["amount"] is not None and data["amount"] <= 0:
+        raise HTTPException(status_code=400, detail="Belopp måste vara positivt.")
+    updated = update_loan(db, loan_id, data)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Lån hittades inte")
+    return updated
+
+
+@router.delete("/loans/{loan_id}", status_code=204)
+def loans_delete(loan_id: int, db: Session = Depends(get_db)):
+    if not delete_loan(db, loan_id):
+        raise HTTPException(status_code=404, detail="Lån hittades inte")
+
+
+@router.post("/loans/parse-text")
+def loans_parse_text(body: FinanceLoanParseTextRequest):
+    from app.services.finance.ai_finance import parse_loans_from_text
+
+    cfg = get_finance_config()
+    return parse_loans_from_text(body.text, cfg)
+
+
+@router.post("/loans/parse-image")
+async def loans_parse_image(file: UploadFile = File(...)):
+    from app.services.finance.ai_finance import parse_loans_from_image
+
+    raw = await file.read()
+    mime = file.content_type or "image/png"
+    cfg = get_finance_config()
+    return parse_loans_from_image(raw, mime, cfg)
+
+
+@router.post("/loans/upsert")
+def loans_upsert(body: FinanceLoanUpsertRequest, db: Session = Depends(get_db)):
+    rows = [item.model_dump() for item in body.loans]
+    if not rows:
+        raise HTTPException(status_code=400, detail="Inga lån att spara.")
+    for row in rows:
+        if row["amount"] <= 0:
+            raise HTTPException(status_code=400, detail="Alla belopp måste vara positiva.")
+    result = upsert_loans(db, rows)
+    return {
+        "ok": True,
+        "created": result["created"],
+        "updated": result["updated"],
+        "total_debt": result["total_debt"],
+        "items": [_loan_to_dict(l) for l in result["items"]],
+    }

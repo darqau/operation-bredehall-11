@@ -6,7 +6,7 @@
   <title>Operation Bredehall 11</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/app.css?v=4">
+  <link rel="stylesheet" href="/static/css/app.css?v=16">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
@@ -21,6 +21,7 @@
         <button class="nav-item active" data-page="home"><span class="nav-icon">🏠</span> Översikt</button>
         <button class="nav-item" data-page="maintenance"><span class="nav-icon">🔧</span> Underhåll</button>
         <button class="nav-item" data-page="finance"><span class="nav-icon">💰</span> Ekonomi</button>
+        <button class="nav-item" data-page="categories"><span class="nav-icon">🏷️</span> Kategorier</button>
         <button class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span> Inställningar</button>
       </nav>
     </aside>
@@ -84,47 +85,104 @@
 
         <!-- FINANCE -->
         <section class="page" data-page="finance">
-          <div class="grid grid-3" style="margin-bottom:1rem">
-            <div class="card">
-              <div class="stat-value stat-success" id="finance-total">–</div>
-              <div class="stat-label">Totalt saldo</div>
-            </div>
-            <div class="card">
-              <div class="stat-value stat-accent" id="finance-txn-count">0</div>
-              <div class="stat-label">Transaktioner</div>
-            </div>
-            <div class="card">
-              <div class="toolbar" style="margin:0;height:100%;align-items:center">
-                <button class="btn btn-primary" id="btn-process">Importera CSV</button>
-                <button class="btn" id="btn-manual-txn">+ Manuell</button>
-                <button class="btn" id="btn-recategorize" title="Kör om den regelbaserade kategoriseringen">↻ Kategorisera</button>
-                <button class="btn" id="btn-recategorize-ai" title="Använd lokal AI (LM Studio) på okategoriserade">✨ AI-kategorisera</button>
+          <!-- Hero dashboard -->
+          <div class="hero-grid" id="finance-hero">
+            <div class="card hero-card hero-assets">
+              <div class="hero-eyebrow">Tillgångar &amp; netto</div>
+              <div class="hero-balance-stack">
+                <div class="hero-balance-line">
+                  <span class="hero-net-label">Tillgångar</span>
+                  <span class="hero-net-value stat-success" id="hero-assets">–</span>
+                </div>
+                <div class="hero-balance-line">
+                  <span class="hero-net-label">Netto</span>
+                  <span class="hero-net-value" id="hero-net-worth">–</span>
+                </div>
               </div>
+              <div class="hero-sub" id="hero-assets-sub">Kontosaldo minus registrerade lån</div>
             </div>
+
+            <div class="card hero-card">
+              <div class="hero-eyebrow">Genomsnittlig nettoinkomst / månad</div>
+              <div class="hero-net-row">
+                <div class="hero-net">
+                  <span class="hero-net-value" id="hero-net-total">–</span>
+                  <span class="hero-net-label">Totalt snitt</span>
+                </div>
+                <div class="hero-net">
+                  <span class="hero-net-value" id="hero-net-3m">–</span>
+                  <span class="hero-net-label">Rullande 3 mån</span>
+                </div>
+                <div class="hero-net">
+                  <span class="hero-net-value" id="hero-net-12m">–</span>
+                  <span class="hero-net-label">Rullande 12 mån</span>
+                </div>
+              </div>
+              <div class="hero-sub">Inkomst − utgift, exkl. interna överföringar</div>
+            </div>
+
+            <div class="card hero-card">
+              <div class="hero-head">
+                <div class="hero-eyebrow">Topp 5 utgiftskategorier</div>
+                <div class="hero-toggle">
+                  <button type="button" class="hero-toggle-btn active" id="hero-exp-month" data-range="month">Senaste månaden</button>
+                  <button type="button" class="hero-toggle-btn" id="hero-exp-year" data-range="year">Senaste året</button>
+                </div>
+              </div>
+              <ol class="hero-exp-list" id="hero-expenses"></ol>
+              <div class="hero-sub" id="hero-exp-range"></div>
+            </div>
+          </div>
+
+          <details class="card loan-section" id="loan-section">
+            <summary class="loan-summary">
+              <span class="loan-summary-title">Skulder / bolån</span>
+              <span class="loan-summary-meta" id="loan-summary-meta">–</span>
+              <span class="loan-summary-chevron" aria-hidden="true">›</span>
+            </summary>
+            <div class="loan-section-body">
+              <div class="toolbar loan-toolbar">
+                <button class="btn btn-sm" id="btn-loan-add" type="button">+ Lägg till</button>
+                <button class="btn btn-sm" id="btn-loan-import" type="button">📷 Importera</button>
+              </div>
+              <div id="loan-list" class="loan-list"></div>
+            </div>
+          </details>
+
+          <div class="finance-actions toolbar" style="margin-bottom:1rem">
+            <button class="btn btn-primary" id="btn-process">Importera CSV</button>
+            <button class="btn" id="btn-manual-txn">+ Manuell</button>
+            <button class="btn" id="btn-recategorize" title="Kör om den regelbaserade kategoriseringen">↻ Kategorisera</button>
+            <button class="btn" id="btn-recategorize-ai" title="Använd lokal AI (LM Studio) på okategoriserade">✨ AI-kategorisera</button>
           </div>
           <p class="error" id="finance-error"></p>
           <p class="process-result" id="process-result"></p>
 
-          <div class="card finance-filters">
-            <h3 class="section-title">Filter &amp; analys</h3>
-            <div class="filter-grid">
-              <div class="field"><label class="label">Konto</label><select class="select" id="fin-filter-account"><option value="">Alla konton</option></select></div>
-              <div class="field"><label class="label">År</label><select class="select" id="fin-filter-year"><option value="">Alla år</option></select></div>
-              <div class="field"><label class="label">Kategori</label><select class="select" id="fin-filter-category"><option value="">Alla</option></select></div>
-              <div class="field"><label class="label">Typ</label><select class="select" id="fin-filter-typ"><option value="">Alla</option></select></div>
-              <div class="field"><label class="label">Från</label><input class="input" type="date" id="fin-filter-from"></div>
-              <div class="field"><label class="label">Till</label><input class="input" type="date" id="fin-filter-to"></div>
-              <div class="field" style="grid-column:1/-1"><label class="label">Sök beskrivning</label><input class="input" id="fin-filter-search" placeholder="t.ex. ICA, hyra…"></div>
+          <div class="ai-panel hidden" id="ai-categorize-panel">
+            <div class="ai-panel-head">
+              <h3 class="section-title">✨ AI-kategorisering</h3>
+              <div class="ai-panel-actions">
+                <button class="btn btn-sm" id="ai-btn-pause" type="button">⏸ Pausa</button>
+                <button class="btn btn-sm hidden" id="ai-btn-resume" type="button">▶ Fortsätt</button>
+                <button class="btn btn-sm" id="ai-btn-close" type="button">✕</button>
+              </div>
             </div>
-            <div class="toolbar">
-              <label class="check-label"><input type="checkbox" id="fin-filter-no-transfer" checked> Dölj överföringar</label>
-              <label class="check-label"><input type="checkbox" id="fin-filter-cap"> Dölj stora engångsposter (&gt; 100 000 kr)</label>
-              <button class="btn btn-sm" id="fin-filter-reset">Rensa filter</button>
-              <button class="btn btn-sm btn-primary" id="fin-filter-apply">Uppdatera</button>
+            <div class="ai-progress-bar"><div class="ai-progress-fill" id="ai-progress-fill"></div></div>
+            <div class="ai-stats">
+              <span id="ai-counter">0 / 0</span>
+              <span id="ai-remaining" class="ai-muted">– kvar i kö</span>
             </div>
+            <p class="ai-current" id="ai-current">Väntar…</p>
+            <div class="ai-result hidden" id="ai-result"></div>
           </div>
 
-          <div class="grid grid-4" id="fin-summary" style="margin:1rem 0"></div>
+          <div class="toolbar" style="margin:0.25rem 0 0.75rem">
+            <button class="btn btn-sm" id="btn-open-filters-top">⚙ Filter &amp; analys</button>
+            <button class="btn btn-sm" id="btn-go-categories">🏷️ Hantera kategorier</button>
+            <span id="active-filter-summary" class="active-filter-summary"></span>
+          </div>
+
+          <div class="grid grid-4 hidden" id="fin-summary-wrap" style="margin:1rem 0"></div>
 
           <div class="drop-zone" id="drop-zone">
             <input type="file" id="file-input" accept=".csv,text/csv" multiple hidden>
@@ -139,10 +197,12 @@
           <div class="grid grid-2" style="margin:0.5rem 0 1rem">
             <div class="card">
               <div class="chart-head"><h3 class="section-title">Netto över tid</h3><button class="btn btn-sm chart-reset" data-chart="net" title="Återställ zoom">↺</button></div>
+              <p class="chart-exclude-note hidden" id="chart-exclude-note-net"></p>
               <div class="chart-box chart-box-lg"><canvas id="chart-net"></canvas></div>
             </div>
             <div class="card">
               <div class="chart-head"><h3 class="section-title">Inkomst vs utgift per månad</h3><button class="btn btn-sm chart-reset" data-chart="incomeExpense" title="Återställ zoom">↺</button></div>
+              <p class="chart-exclude-note hidden" id="chart-exclude-note-ie"></p>
               <div class="chart-box chart-box-lg"><canvas id="chart-income-expense"></canvas></div>
             </div>
           </div>
@@ -153,11 +213,17 @@
             </div>
             <div class="card">
               <div class="chart-head"><h3 class="section-title">Månatliga utgifter</h3><button class="btn btn-sm chart-reset" data-chart="expenses" title="Återställ zoom">↺</button></div>
+              <p class="chart-exclude-note hidden" id="chart-exclude-note-exp"></p>
               <div class="chart-box chart-box-lg"><canvas id="chart-expenses"></canvas></div>
             </div>
           </div>
+          <div class="card" style="margin-bottom:1rem">
+            <h3 class="section-title">Konton över tid (aktiv period &amp; saldo)</h3>
+            <p class="chart-hint" style="margin-bottom:0.5rem">Varje stapel visar kontots aktiva period (första → senaste transaktion). Aktuellt saldo visas vid stapelns slut.</p>
+            <div class="chart-box chart-box-lg" id="chart-timeline-box"><canvas id="chart-timeline"></canvas></div>
+          </div>
 
-          <div class="grid grid-2">
+          <div class="grid grid-2" style="margin-bottom:1rem">
             <div>
               <h3 class="section-title">Kontosaldo</h3>
               <div id="account-list"></div>
@@ -167,6 +233,42 @@
               <div id="txn-table-wrap"></div>
               <div class="toolbar" id="txn-pagination" style="margin-top:0.5rem"></div>
             </div>
+          </div>
+        </section>
+
+        <!-- CATEGORIES -->
+        <section class="page" data-page="categories">
+          <div class="toolbar" style="margin-bottom:0.75rem">
+            <div class="hero-toggle">
+              <button type="button" class="hero-toggle-btn active" id="cat-range-month" data-range="month">Månad</button>
+              <button type="button" class="hero-toggle-btn" id="cat-range-year" data-range="year">År</button>
+            </div>
+            <select class="select" id="cat-year" style="max-width:6rem"></select>
+            <select class="select hidden" id="cat-month" style="max-width:7rem"></select>
+            <button class="btn btn-sm" id="cat-refresh">↻ Uppdatera</button>
+          </div>
+
+          <div class="grid grid-2" style="margin-bottom:1rem">
+            <div class="card">
+              <h3 class="section-title">Utgifter per kategori</h3>
+              <p class="chart-hint" id="cat-chart-subtitle"></p>
+              <div class="chart-box chart-box-lg"><canvas id="chart-cat-breakdown"></canvas></div>
+            </div>
+            <div class="card">
+              <h3 class="section-title">Antal transaktioner per kategori</h3>
+              <div id="cat-stats-table"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="toolbar" style="margin-bottom:0.75rem">
+              <h3 class="section-title" style="margin:0">Justera kategorier</h3>
+              <select class="select" id="cat-filter-category"><option value="">Alla kategorier</option></select>
+              <label class="checkbox-label"><input type="checkbox" id="cat-only-ovrigt"> Endast Övrigt</label>
+              <input class="input" id="cat-search" placeholder="Sök beskrivning…" style="max-width:14rem">
+            </div>
+            <div id="cat-txn-table"></div>
+            <div class="toolbar" id="cat-pagination" style="margin-top:0.5rem"></div>
           </div>
         </section>
 
@@ -226,6 +328,7 @@
     <button class="nav-item active" data-page="home"><span class="nav-icon">🏠</span> Hem</button>
     <button class="nav-item" data-page="maintenance"><span class="nav-icon">🔧</span> Underhåll</button>
     <button class="nav-item" data-page="finance"><span class="nav-icon">💰</span> Ekonomi</button>
+    <button class="nav-item" data-page="categories"><span class="nav-icon">🏷️</span> Kateg.</button>
     <button class="nav-item" data-page="settings"><span class="nav-icon">⚙️</span> Mer</button>
   </nav>
 
@@ -240,6 +343,42 @@
     </div>
   </div>
 
-  <script src="/static/js/app.js?v=4"></script>
+  <!-- Floating filter button (finance page only) -->
+  <button class="filter-fab hidden" id="filter-fab" aria-label="Öppna filter">
+    <span class="filter-fab-icon">⚙</span> Filter
+  </button>
+
+  <!-- Slide-in filter drawer -->
+  <div class="drawer-backdrop" id="filter-drawer-backdrop"></div>
+  <aside class="filter-drawer" id="filter-drawer" aria-label="Filter och analys">
+    <div class="filter-drawer-head">
+      <h3 class="section-title" style="margin:0">Filter &amp; analys</h3>
+      <button class="drawer-close" id="filter-drawer-close" aria-label="Stäng">✕</button>
+    </div>
+    <div class="filter-drawer-body">
+      <div class="field"><label class="label">Konto</label><select class="select" id="fin-filter-account"><option value="">Alla konton</option></select></div>
+      <div class="field"><label class="label">År</label><select class="select" id="fin-filter-year"><option value="">Alla år</option></select></div>
+      <div class="field"><label class="label">Kategori</label><select class="select" id="fin-filter-category"><option value="">Alla</option></select></div>
+      <div class="field"><label class="label">Typ</label><select class="select" id="fin-filter-typ"><option value="">Alla</option></select></div>
+      <div class="field"><label class="label">Från</label><input class="input" type="date" id="fin-filter-from"></div>
+      <div class="field"><label class="label">Till</label><input class="input" type="date" id="fin-filter-to"></div>
+      <div class="field"><label class="label">Sök beskrivning</label><input class="input" id="fin-filter-search" placeholder="t.ex. ICA, hyra…"></div>
+
+      <label class="switch-row" title="Interna överföringar mellan dina egna konton räknas inte som inkomst eller utgift">
+        <span class="switch"><input type="checkbox" id="fin-filter-no-transfer" checked><span class="switch-slider"></span></span>
+        <span>Räkna inte interna överföringar</span>
+      </label>
+      <label class="switch-row">
+        <span class="switch"><input type="checkbox" id="fin-filter-cap"><span class="switch-slider"></span></span>
+        <span>Dölj stora engångsposter (&gt; 100 000 kr)</span>
+      </label>
+    </div>
+    <div class="filter-drawer-foot">
+      <button class="btn btn-sm" id="fin-filter-reset">Rensa filter</button>
+      <button class="btn btn-sm btn-primary" id="fin-filter-apply">Uppdatera</button>
+    </div>
+  </aside>
+
+  <script src="/static/js/app.js?v=16"></script>
 </body>
 </html>

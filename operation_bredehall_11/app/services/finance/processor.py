@@ -73,12 +73,13 @@ def process_local_folders(db: Session, config: Dict[str, Any]) -> Dict[str, Any]
             except Exception as e:
                 errors.append(f"{account}/{path.name}: {e}")
 
-    added = create_transactions_bulk(db, all_rows) if all_rows else 0
+    bulk = create_transactions_bulk(db, all_rows) if all_rows else {"added": 0, "skipped": 0}
     return {
         "ok": True,
         "mode": "local",
         "files_processed": len(processed),
-        "transactions_added": added,
+        "transactions_added": bulk["added"],
+        "transactions_skipped": bulk["skipped"],
         "processed": processed,
         "errors": errors,
     }
@@ -94,12 +95,13 @@ def process_gdrive(db: Session, config: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             errors.append(f"{item['account']}/{item['filename']}: {e}")
 
-    added = create_transactions_bulk(db, all_rows) if all_rows else 0
+    bulk = create_transactions_bulk(db, all_rows) if all_rows else {"added": 0, "skipped": 0}
     return {
         "ok": True,
         "mode": "gdrive",
         "files_processed": len(processed),
-        "transactions_added": added,
+        "transactions_added": bulk["added"],
+        "transactions_skipped": bulk["skipped"],
         "processed": processed,
         "errors": errors,
     }
@@ -109,8 +111,16 @@ def process_bank_files(db: Session) -> Dict[str, Any]:
     config = get_finance_config()
     mode = (config.get("storage_mode") or "local").lower()
     if mode == "gdrive":
-        return process_gdrive(db, config)
-    return process_local_folders(db, config)
+        result = process_gdrive(db, config)
+    else:
+        result = process_local_folders(db, config)
+
+    # Newly imported rows may pair with existing ones across own accounts.
+    if result.get("transactions_added"):
+        from app.crud_finance import detect_internal_transfers
+
+        result["internal_transfers"] = detect_internal_transfers(db)
+    return result
 
 
 def add_manual_entry(db: Session, entry: dict, config: Dict[str, Any] | None = None) -> dict:

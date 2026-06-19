@@ -11,18 +11,34 @@ let state = {
   tasks: [],
   stats: null,
   financeDash: null,
+  financeHero: null,
+  financeLoans: null,
+  loanImportPreview: null,
+  heroExpRange: 'month',
   financeConfig: null,
   financeMeta: null,
   financeFilters: {
     account: '', year: '', category: '', typ: '',
     dateFrom: '', dateTo: '', search: '',
-    excludeOverforing: true, maxAmount: 0,
+    excludeOverforing: true, maxAmount: 0, chartMaxAmount: 100000,
     sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50,
   },
   lastSuggestions: [],
   selectedSuggestions: new Set(),
   editingTask: null,
   charts: {},
+  financeCategories: [],
+  aiJob: null,
+  categoryView: {
+    range: 'month',
+    year: new Date().getFullYear(),
+    month: new Date().getMonth() + 1,
+    category: '',
+    onlyOvrigt: false,
+    search: '',
+    offset: 0,
+    limit: 40,
+  },
 };
 
 // ── Utils ──────────────────────────────────────────────────────────
@@ -47,6 +63,75 @@ function formatMoney(n) {
   return new Intl.NumberFormat('sv-SE', { style: 'currency', currency: 'SEK', maximumFractionDigits: 0 }).format(n);
 }
 
+/** Short form for dashboard hero: 1,2 mn kr / 331 tn kr. Full value in title tooltip. */
+function formatMoneyCompact(n) {
+  if (n == null) return '–';
+  const sign = n < 0 ? '−' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1_000_000) {
+    const mn = abs / 1_000_000;
+    const txt = mn >= 10
+      ? `${Math.round(mn)} mn`
+      : `${mn.toFixed(1).replace('.', ',')} mn`;
+    return `${sign}${txt} kr`;
+  }
+  if (abs >= 100_000) {
+    return `${sign}${Math.round(abs / 1_000)} tn kr`;
+  }
+  return formatMoney(n);
+}
+
+function setMoneyEl(el, value, { compact = false } = {}) {
+  if (!el) return;
+  const full = formatMoney(value);
+  el.textContent = compact ? formatMoneyCompact(value) : full;
+  el.title = compact && full !== el.textContent ? full : '';
+}
+
+function accountNumbersMap() {
+  return state.financeConfig?.account_numbers || state.financeMeta?.account_numbers || {};
+}
+
+function getAccountNumber(name, explicit) {
+  if (explicit) return String(explicit).trim();
+  if (!name) return '';
+  const fromMap = accountNumbersMap()[name];
+  if (fromMap) return String(fromMap).trim();
+  const metaHit = (state.financeMeta?.accounts || []).find(a =>
+    (typeof a === 'object' ? a.name : a) === name);
+  if (metaHit?.account_number) return metaHit.account_number;
+  return '';
+}
+
+function normalizeAccountItems(items) {
+  return (items || []).map(a =>
+    typeof a === 'object'
+      ? { name: a.name, account_number: a.account_number || getAccountNumber(a.name) }
+      : { name: a, account_number: getAccountNumber(a) });
+}
+
+function formatAccountText(name, number) {
+  const num = number || getAccountNumber(name);
+  return num ? `${name} · ${num}` : name;
+}
+
+function formatAccountInlineHtml(name, number) {
+  const num = number || getAccountNumber(name);
+  if (!num) return escapeHtml(name);
+  return `${escapeHtml(name)}<span class="acc-num-inline"> · ${escapeHtml(num)}</span>`;
+}
+
+function formatAccountBlockHtml(name, number) {
+  const num = number || getAccountNumber(name);
+  if (!num) return `<strong>${escapeHtml(name)}</strong>`;
+  return `<strong>${escapeHtml(name)}</strong><span class="acc-num">${escapeHtml(num)}</span>`;
+}
+
+function chartAccountLabel(item) {
+  const name = item?.account || item?.name || '';
+  return formatAccountText(name, item?.account_number);
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(API + path, { cache: 'no-store', ...opts });
   if (!r.ok) {
@@ -66,6 +151,7 @@ function setPage(page) {
     home: ['Översikt', 'Villa & ekonomi i ett'],
     maintenance: ['Underhåll', 'Planera och följ upp uppgifter'],
     finance: ['Ekonomi', 'Importera och analysera transaktioner'],
+    categories: ['Kategorier', 'Justera och analysera utgiftskategorier'],
     settings: ['Inställningar', 'Datakällor och konfiguration'],
   };
   const [h, sub] = titles[page] || ['', ''];
@@ -73,9 +159,13 @@ function setPage(page) {
   $('#page-subtitle').textContent = sub;
   $('#sidebar').classList.remove('open');
   $('#sidebar-overlay').classList.remove('open');
+  const fab = $('#filter-fab');
+  if (fab) fab.classList.toggle('hidden', page !== 'finance');
+  if (page !== 'finance') closeFilterDrawer?.();
   if (page === 'home') loadHome();
   if (page === 'maintenance') loadTasks();
   if (page === 'finance') loadFinance();
+  if (page === 'categories') loadCategoriesPage();
   if (page === 'settings') loadSettings();
 }
 
@@ -110,7 +200,7 @@ async function loadHome() {
     $('#home-recent-finance').innerHTML = recent.length
       ? recent.map(t => `<div class="task-item" style="cursor:default">
           <div><p class="task-title">${escapeHtml(t.description)}</p>
-          <p class="task-meta">${escapeHtml(t.account)} · ${formatDate(t.txn_date)}</p></div>
+          <p class="task-meta">${formatAccountInlineHtml(t.account, t.account_number)} · ${formatDate(t.txn_date)}</p></div>
           <span class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${formatMoney(t.amount)}</span></div>`).join('')
       : '<p class="empty">Inga transaktioner än. Importera CSV-filer under Ekonomi.</p>';
   } catch (e) {
@@ -398,6 +488,7 @@ function financeQueryString(extra = {}) {
   if (f.search) p.set('search', f.search);
   if (f.excludeOverforing) p.set('exclude_overforing', 'true');
   if (f.maxAmount) p.set('max_amount', String(f.maxAmount));
+  if (f.chartMaxAmount) p.set('chart_max_amount', String(f.chartMaxAmount));
   if (f.sortBy) p.set('sort_by', f.sortBy);
   if (f.sortDir) p.set('sort_dir', f.sortDir);
   if (f.offset != null) p.set('offset', String(f.offset));
@@ -426,7 +517,14 @@ function populateFinanceFilterDropdowns(meta) {
       `<option value="${escapeHtml(String(v))}" ${v === keep ? 'selected' : ''}>${escapeHtml(String(v))}</option>`
     ).join('');
   };
-  fill($('#fin-filter-account'), meta.accounts || [], state.financeFilters.account);
+  const accountSel = $('#fin-filter-account');
+  if (accountSel) {
+    const keep = state.financeFilters.account;
+    const accounts = normalizeAccountItems(meta.accounts);
+    accountSel.innerHTML = `<option value="">Alla konton</option>` + accounts.map(a =>
+      `<option value="${escapeHtml(a.name)}" ${a.name === keep ? 'selected' : ''}>${escapeHtml(formatAccountText(a.name, a.account_number))}</option>`
+    ).join('');
+  }
   fill($('#fin-filter-category'), meta.categories || [], state.financeFilters.category);
   fill($('#fin-filter-typ'), meta.typs || [], state.financeFilters.typ);
   const yearSel = $('#fin-filter-year');
@@ -439,38 +537,72 @@ function populateFinanceFilterDropdowns(meta) {
 }
 
 async function loadFinance() {
-  try {
-    state.financeConfig = await api('/api/finance/config');
-    const qs = financeQueryString();
-    const [foldersResp, dash, meta, txnsResp] = await Promise.all([
-      api('/api/finance/folders'),
-      api('/api/finance/dashboard' + (qs ? '?' + qs : '')),
-      api('/api/finance/meta'),
-      api('/api/finance/transactions?' + financeQueryString()),
-    ]);
-    state.financeDash = dash;
-    state.financeMeta = meta;
-    state.financeFolders = foldersResp.folders || [];
-    populateFinanceFilterDropdowns(meta);
+  const errEl = $('#finance-error');
+  if (errEl) errEl.textContent = '';
+  const qs = financeQueryString();
+  const excl = state.financeFilters.excludeOverforing ? 'true' : 'false';
+
+  // Resilient: one failed call must not blank the whole filter UI.
+  const [cfgR, foldersR, dashR, metaR, txnsR, heroR, loansR] = await Promise.allSettled([
+    api('/api/finance/config'),
+    api('/api/finance/folders'),
+    api('/api/finance/dashboard' + (qs ? '?' + qs : '')),
+    api('/api/finance/meta'),
+    api('/api/finance/transactions?' + qs),
+    api('/api/finance/hero?exclude_internal=' + excl),
+    api('/api/finance/loans'),
+  ]);
+
+  const failures = [];
+
+  if (cfgR.status === 'fulfilled') state.financeConfig = cfgR.value;
+  else failures.push('konfiguration');
+
+  // Meta drives the filter dropdowns — populate even if other calls failed.
+  if (metaR.status === 'fulfilled') {
+    state.financeMeta = metaR.value;
+    populateFinanceFilterDropdowns(metaR.value);
+  } else {
+    failures.push('filteralternativ');
+  }
+
+  if (foldersR.status === 'fulfilled') {
+    state.financeFolders = foldersR.value.folders || [];
     renderKnownAccounts(state.financeFolders);
-    const d = state.financeDash;
     const pending = state.financeFolders.reduce((s, f) => s + (f.pending_files || 0), 0);
-    $('#finance-total').textContent = formatMoney(d.total_balance);
-    $('#finance-txn-count').textContent = d.transaction_count;
     if (pending > 0) {
       $('#process-result').textContent = `${pending} CSV-fil(er) väntar i inbox. Klicka "Importera CSV" för att bearbeta.`;
     }
+  } else {
+    failures.push('konton');
+  }
 
-    const s = d.summary || {};
-    $('#fin-summary').innerHTML = `
-      <div class="card"><div class="stat-value stat-success">${formatMoney(s.income)}</div><div class="stat-label">Inkomst (filter)</div></div>
-      <div class="card"><div class="stat-value stat-danger">${formatMoney(s.expense)}</div><div class="stat-label">Utgift (filter)</div></div>
-      <div class="card"><div class="stat-value stat-accent">${formatMoney(s.net)}</div><div class="stat-label">Netto (filter)</div></div>
-      <div class="card"><div class="stat-value">${s.count ?? 0}</div><div class="stat-label">Transaktioner (filter)</div></div>`;
+  if (heroR.status === 'fulfilled') { state.financeHero = heroR.value; renderHero(heroR.value); }
+  else failures.push('översikt');
 
+  if (loansR.status === 'fulfilled') { state.financeLoans = loansR.value; renderLoans(loansR.value); }
+  else failures.push('lån');
+
+  if (dashR.status === 'fulfilled') {
+    const d = state.financeDash = dashR.value;
+    const f = state.financeFilters;
+    const hasActiveFilters = !!(f.account || f.year || f.category || f.typ || f.dateFrom || f.dateTo || f.search || f.maxAmount);
+    const sumWrap = $('#fin-summary-wrap');
+    if (sumWrap) {
+      sumWrap.classList.toggle('hidden', !hasActiveFilters);
+      if (hasActiveFilters) {
+        const s = d.summary || {};
+        sumWrap.innerHTML = `
+          <div class="card"><div class="stat-value stat-success">${formatMoney(s.income)}</div><div class="stat-label">Inkomst (filter)</div></div>
+          <div class="card"><div class="stat-value stat-danger">${formatMoney(s.expense)}</div><div class="stat-label">Utgift (filter)</div></div>
+          <div class="card"><div class="stat-value stat-accent">${formatMoney(s.net)}</div><div class="stat-label">Netto (filter)</div></div>
+          <div class="card"><div class="stat-value">${s.count ?? 0}</div><div class="stat-label">Träffar</div></div>`;
+      }
+    }
     $('#account-list').innerHTML = (d.accounts || []).map(a =>
       `<div class="account-pill ${state.financeFilters.account === a.name ? 'active' : ''}" data-account="${escapeHtml(a.name)}">
-        <strong>${escapeHtml(a.name)}</strong><span>${formatMoney(a.balance)}</span></div>`
+        <div class="account-pill-name">${formatAccountBlockHtml(a.name, a.account_number)}</div>
+        <span class="account-pill-balance">${formatMoney(a.balance)}</span></div>`
     ).join('') || '<p class="empty">Inga konton med saldo än.</p>';
     $$('#account-list .account-pill').forEach(pill => {
       pill.addEventListener('click', () => {
@@ -479,14 +611,269 @@ async function loadFinance() {
         loadFinance();
       });
     });
-
     renderFinanceCharts(d);
-    renderTransactionTable(txnsResp.items || [], txnsResp.total || 0);
-  } catch (e) {
-    $('#finance-total').textContent = '–';
-    $('#finance-error').textContent = e.message;
+  } else {
+    failures.push('dashboard');
+  }
+
+  if (txnsR.status === 'fulfilled') {
+    renderTransactionTable(txnsR.value.items || [], txnsR.value.total || 0);
+  } else {
+    failures.push('transaktioner');
+  }
+
+  updateActiveFilterSummary();
+
+  if (failures.length && errEl) {
+    errEl.textContent = `Kunde inte ladda: ${failures.join(', ')}. Övriga delar uppdaterades. Försök igen.`;
   }
 }
+
+function updateActiveFilterSummary() {
+  const el = $('#active-filter-summary');
+  if (!el) return;
+  const f = state.financeFilters;
+  const parts = [];
+  if (f.account) parts.push(formatAccountText(f.account));
+  if (f.year) parts.push(String(f.year));
+  if (f.category) parts.push(f.category);
+  if (f.typ) parts.push(f.typ);
+  if (f.dateFrom || f.dateTo) parts.push(`${f.dateFrom || '…'} → ${f.dateTo || '…'}`);
+  if (f.search) parts.push(`"${f.search}"`);
+  if (f.excludeOverforing) parts.push('exkl. överföringar');
+  if (f.maxAmount) parts.push('exkl. >100k');
+  el.textContent = parts.length ? 'Aktiva filter: ' + parts.join(' · ') : 'Inga aktiva filter';
+}
+
+function signedMoneyClass(n) {
+  return (n || 0) >= 0 ? 'pos' : 'neg';
+}
+
+function renderHero(hero) {
+  if (!hero) return;
+  setMoneyEl($('#hero-assets'), hero.total_assets, { compact: true });
+  const nwEl = $('#hero-net-worth');
+  setMoneyEl(nwEl, hero.net_worth, { compact: true });
+  if (nwEl) {
+    nwEl.classList.remove('pos', 'neg', 'stat-success', 'stat-danger');
+    nwEl.classList.add(signedMoneyClass(hero.net_worth));
+  }
+
+  const net = hero.net_income || {};
+  const setNet = (id, val) => {
+    const el = $(id);
+    if (!el) return;
+    setMoneyEl(el, val, { compact: Math.abs(val || 0) >= 100_000 });
+    el.classList.remove('pos', 'neg');
+    el.classList.add(signedMoneyClass(val));
+  };
+  setNet('#hero-net-total', net.avg_total);
+  setNet('#hero-net-3m', net.avg_3m);
+  setNet('#hero-net-12m', net.avg_12m);
+
+  renderHeroExpenses();
+}
+
+function renderHeroExpenses() {
+  const hero = state.financeHero;
+  const list = $('#hero-expenses');
+  if (!hero || !list) return;
+  const range = state.heroExpRange;
+  const items = (range === 'year' ? hero.top_expenses_year : hero.top_expenses_month) || [];
+  $('#hero-exp-month')?.classList.toggle('active', range === 'month');
+  $('#hero-exp-year')?.classList.toggle('active', range === 'year');
+  $('#hero-exp-range').textContent = (range === 'year' ? hero.year_label : hero.month_label) || '';
+
+  if (!items.length) {
+    list.innerHTML = '<li style="color:var(--text-muted)">Inga utgifter i perioden.</li>';
+    return;
+  }
+  const max = Math.max(...items.map(i => i.amount), 1);
+  list.innerHTML = items.map(i => `
+    <li>
+      <span class="hero-exp-name">${escapeHtml(i.category)}</span>
+      <span class="hero-exp-bar"><span style="width:${Math.round((i.amount / max) * 100)}%"></span></span>
+      <span class="hero-exp-amount">${formatMoney(i.amount)}</span>
+    </li>`).join('');
+}
+
+$('#hero-exp-month')?.addEventListener('click', () => { state.heroExpRange = 'month'; renderHeroExpenses(); });
+$('#hero-exp-year')?.addEventListener('click', () => { state.heroExpRange = 'year'; renderHeroExpenses(); });
+
+function loanRowHtml(loan, { actions = true, preview = false } = {}) {
+  const actionBtns = actions ? `
+      <div class="loan-actions">
+        <button type="button" class="btn btn-sm loan-edit" data-id="${loan.id}">✎</button>
+        <button type="button" class="btn btn-sm loan-delete" data-id="${loan.id}">✕</button>
+      </div>` : '';
+  return `
+    <div class="loan-row ${preview ? 'loan-preview-row' : ''}" data-id="${loan.id || ''}">
+      <div class="loan-icon" aria-hidden="true">🏠</div>
+      <div class="loan-main">
+        <div class="loan-label">${escapeHtml(loan.label || 'Bolån')}</div>
+        <div class="loan-number">${escapeHtml(loan.account_number || '')}</div>
+        ${loan.typ ? `<div class="loan-meta">${escapeHtml(loan.typ)}</div>` : ''}
+      </div>
+      <div class="loan-amount">${formatMoney(loan.amount)}</div>
+      ${actionBtns}
+    </div>`;
+}
+
+function bindLoanRowActions(listEl, items) {
+  if (!listEl) return;
+  listEl.querySelectorAll('.loan-edit').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const loan = items.find(l => String(l.id) === btn.dataset.id);
+      if (loan) openLoanModal(loan);
+    });
+  });
+  listEl.querySelectorAll('.loan-delete').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Ta bort detta lån?')) return;
+      await api('/api/finance/loans/' + btn.dataset.id, { method: 'DELETE' });
+      loadFinance();
+    });
+  });
+}
+
+function renderLoans(data) {
+  const items = data?.items || [];
+  const total = formatMoney(data?.total_debt ?? 0);
+  const totalCompact = formatMoneyCompact(data?.total_debt ?? 0);
+  const metaEl = $('#loan-summary-meta');
+  if (metaEl) {
+    metaEl.innerHTML = items.length
+      ? `${items.length} lån · <strong title="${escapeHtml(total)}">${escapeHtml(totalCompact)}</strong>`
+      : 'Inga lån registrerade';
+  }
+
+  const listEl = $('#loan-list');
+  if (!listEl) return;
+  listEl.innerHTML = !items.length
+    ? '<p class="loan-empty">Lägg till manuellt eller importera från skärmdump.</p>'
+    : items.map(loan => loanRowHtml(loan)).join('');
+  if (items.length) bindLoanRowActions(listEl, items);
+}
+
+function openLoanModal(loan = null) {
+  const isEdit = !!loan;
+  openModal(`
+    <form id="loan-form">
+      <div class="field"><label class="label">Namn</label><input class="input" name="label" required value="${escapeHtml(loan?.label || 'Bolån Nordea')}"></div>
+      <div class="field"><label class="label">Kontonummer</label><input class="input" name="account_number" required placeholder="3993 65 18128" value="${escapeHtml(loan?.account_number || '')}"></div>
+      <div class="field"><label class="label">Belopp (SEK)</label><input class="input" type="number" step="0.01" min="0.01" name="amount" required value="${loan?.amount ?? ''}"></div>
+      <div class="field"><label class="label">Typ</label><input class="input" name="typ" value="${escapeHtml(loan?.typ || 'bolån')}"></div>
+      <div class="field"><label class="label">Anteckningar</label><textarea class="textarea" name="notes" rows="2">${escapeHtml(loan?.notes || '')}</textarea></div>
+    </form>`,
+    isEdit ? 'Redigera lån' : 'Nytt lån',
+    `<button class="btn btn-primary" id="btn-save-loan">Spara</button>`
+  );
+  $('#btn-save-loan').onclick = async () => {
+    const fd = new FormData($('#loan-form'));
+    const body = Object.fromEntries(fd.entries());
+    body.amount = parseFloat(body.amount);
+    body.notes = body.notes || null;
+    if (isEdit) {
+      await api('/api/finance/loans/' + loan.id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await api('/api/finance/loans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+    closeModal();
+    loadFinance();
+  };
+}
+
+function renderLoanImportPreview(loans) {
+  if (!loans?.length) {
+    return '<p class="loan-empty">Inga lån hittades.</p>';
+  }
+  return `<div class="loan-preview-list">${loans.map(loan => loanRowHtml(loan, { actions: false, preview: true })).join('')}</div>`;
+}
+
+function openLoanImportModal() {
+  state.loanImportPreview = null;
+  openModal(`
+    <p class="chart-hint">Ladda upp en skärmdump från bankappen (t.ex. Nordea bolån) eller klistra in text. AI tolkar lånen — granska innan du sparar.</p>
+    <div class="field">
+      <label class="label">Skärmdump</label>
+      <input class="input" type="file" id="loan-image-input" accept="image/*">
+    </div>
+    <div class="field">
+      <label class="label">Eller klistra in text</label>
+      <textarea class="textarea" id="loan-paste-text" rows="5" placeholder="Bolån&#10;3993 65 18128 — 1 352 200,00&#10;..."></textarea>
+    </div>
+    <p class="error hidden" id="loan-import-error"></p>
+    <div id="loan-import-preview"></div>`,
+    'Importera lån',
+    `<button class="btn" id="btn-loan-parse">Tolka</button><button class="btn btn-primary hidden" id="btn-loan-save-import">Spara lån</button>`
+  );
+
+  const errEl = $('#loan-import-error');
+  const previewEl = $('#loan-import-preview');
+  const saveBtn = $('#btn-loan-save-import');
+
+  $('#btn-loan-parse').onclick = async () => {
+    errEl.classList.add('hidden');
+    errEl.textContent = '';
+    previewEl.innerHTML = '<p class="chart-hint">Tolkar…</p>';
+    saveBtn.classList.add('hidden');
+    state.loanImportPreview = null;
+
+    try {
+      const file = $('#loan-image-input')?.files?.[0];
+      const text = $('#loan-paste-text')?.value?.trim() || '';
+      let result;
+      if (file) {
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch(API + '/api/finance/loans/parse-image', { method: 'POST', body: fd });
+        if (!r.ok) throw new Error(await r.text() || r.statusText);
+        result = await r.json();
+      } else if (text) {
+        result = await api('/api/finance/loans/parse-text', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+      } else {
+        throw new Error('Välj en bild eller klistra in text.');
+      }
+
+      if (!result.ok || !result.loans?.length) {
+        throw new Error((result.errors || []).join(' ') || 'Kunde inte tolka lån.');
+      }
+      state.loanImportPreview = result.loans;
+      previewEl.innerHTML = '<h4 class="section-title" style="margin:0.75rem 0 0.5rem">Förhandsgranskning</h4>' + renderLoanImportPreview(result.loans);
+      saveBtn.classList.remove('hidden');
+    } catch (e) {
+      previewEl.innerHTML = '';
+      errEl.textContent = e.message;
+      errEl.classList.remove('hidden');
+    }
+  };
+
+  saveBtn.onclick = async () => {
+    if (!state.loanImportPreview?.length) return;
+    await api('/api/finance/loans/upsert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ loans: state.loanImportPreview }),
+    });
+    closeModal();
+    loadFinance();
+  };
+}
+
+$('#btn-loan-add')?.addEventListener('click', () => openLoanModal());
+$('#btn-loan-import')?.addEventListener('click', openLoanImportModal);
 
 function renderFinanceCharts(d) {
   if (typeof Chart === 'undefined') return;
@@ -494,8 +881,12 @@ function renderFinanceCharts(d) {
   destroyChart('expenses');
   destroyChart('incomeExpense');
   destroyChart('categories');
+  destroyChart('timeline');
 
-  const opts = chartOptions();
+  updateChartExcludeNotes(d);
+
+  const netData = (d.net_income_over_time || []).map(x => x.amount);
+  const opts = chartOptions(chartDataMax(netData));
   const optsLegend = { ...opts, plugins: { ...opts.plugins, legend: { display: true, labels: { color: '#8b93a8' } } } };
 
   const netCtx = $('#chart-net');
@@ -506,7 +897,7 @@ function renderFinanceCharts(d) {
         labels: (d.net_income_over_time || []).map(x => x.month),
         datasets: [{
           label: 'Netto',
-          data: (d.net_income_over_time || []).map(x => x.amount),
+          data: netData,
           borderColor: '#7c6cff',
           backgroundColor: 'rgba(124,108,255,0.15)',
           fill: true,
@@ -523,16 +914,20 @@ function renderFinanceCharts(d) {
       ...(d.monthly_income || []).map(x => x.month),
       ...(d.monthly_expenses || []).map(x => x.month),
     ])].sort();
+    const incomeData = months.map(m => (d.monthly_income || []).find(x => x.month === m)?.amount || 0);
+    const expenseData = months.map(m => Math.abs((d.monthly_expenses || []).find(x => x.month === m)?.amount || 0));
+    const ieOpts = chartOptions(chartDataMax(incomeData, expenseData));
+    ieOpts.plugins = { ...ieOpts.plugins, legend: { display: true, labels: { color: '#8b93a8' } } };
     state.charts.incomeExpense = new Chart(ieCtx, {
       type: 'bar',
       data: {
         labels: months,
         datasets: [
-          { label: 'Inkomst', data: months.map(m => (d.monthly_income || []).find(x => x.month === m)?.amount || 0), backgroundColor: 'rgba(52,211,153,0.7)', borderRadius: 4 },
-          { label: 'Utgift', data: months.map(m => Math.abs((d.monthly_expenses || []).find(x => x.month === m)?.amount || 0)), backgroundColor: 'rgba(248,113,113,0.7)', borderRadius: 4 },
+          { label: 'Inkomst', data: incomeData, backgroundColor: 'rgba(52,211,153,0.7)', borderRadius: 4 },
+          { label: 'Utgift', data: expenseData, backgroundColor: 'rgba(248,113,113,0.7)', borderRadius: 4 },
         ],
       },
-      options: optsLegend,
+      options: ieOpts,
     });
   }
 
@@ -563,20 +958,23 @@ function renderFinanceCharts(d) {
 
   const expCtx = $('#chart-expenses');
   if (expCtx) {
+    const expData = (d.monthly_expenses || []).map(x => Math.abs(x.amount));
     state.charts.expenses = new Chart(expCtx, {
       type: 'bar',
       data: {
         labels: (d.monthly_expenses || []).map(x => x.month),
         datasets: [{
           label: 'Utgifter',
-          data: (d.monthly_expenses || []).map(x => Math.abs(x.amount)),
+          data: expData,
           backgroundColor: 'rgba(244,114,182,0.7)',
           borderRadius: 6,
         }],
       },
-      options: opts,
+      options: chartOptions(chartDataMax(expData)),
     });
   }
+
+  renderBalanceChart(d);
 
   // Reset-zoom buttons + double-click to reset
   $$('.chart-reset').forEach(btn => {
@@ -588,7 +986,146 @@ function renderFinanceCharts(d) {
   });
 }
 
-function chartOptions() {
+const ACCOUNT_COLORS = ['#7c6cff', '#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#60a5fa', '#a78bfa', '#fb923c', '#f87171', '#94a3b8'];
+
+function tsToYearMonth(ts) {
+  const dt = new Date(ts);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Inline plugin: draw a rounded "saldo" chip at the end of each horizontal bar.
+const balanceChipPlugin = {
+  id: 'balanceChips',
+  afterDatasetsDraw(chart) {
+    const { ctx } = chart;
+    const meta = chart.getDatasetMeta(0);
+    const chips = chart.$balanceChips || [];
+    if (!meta || !meta.data) return;
+    ctx.save();
+    ctx.font = '600 11px "DM Sans", system-ui, sans-serif';
+    meta.data.forEach((bar, i) => {
+      const label = chips[i];
+      if (!label) return;
+      const textW = ctx.measureText(label).width;
+      const padX = 7, h = 18;
+      const w = textW + padX * 2;
+      let x = bar.x + 8;            // just past the bar's end
+      const y = bar.y - h / 2;
+      // keep chip inside the canvas
+      if (x + w > chart.chartArea.right) x = Math.max(chart.chartArea.left, bar.x - w - 8);
+      const r = 9;
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+      ctx.fillStyle = 'rgba(15,17,23,0.92)';
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = bar.options?.backgroundColor || 'rgba(124,108,255,0.8)';
+      ctx.stroke();
+      ctx.fillStyle = '#f0f2f8';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, x + padX, y + h / 2 + 0.5);
+    });
+    ctx.restore();
+  },
+};
+
+function renderBalanceChart(d) {
+  const ctx = $('#chart-timeline');
+  if (!ctx) return;
+  destroyChart('timeline');
+  const items = (d.account_timeline || []).filter(a => a.first_date && a.last_date);
+  if (!items.length) {
+    ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
+    return;
+  }
+  // Sort by first activity so the timeline reads top→bottom chronologically.
+  items.sort((a, b) => a.first_date.localeCompare(b.first_date));
+
+  const DAY = 86400000;
+  const starts = items.map(a => new Date(a.first_date + 'T12:00:00').getTime());
+  const ends = items.map(a => new Date(a.last_date + 'T12:00:00').getTime());
+  const dataMin = Math.min(...starts);
+  const dataMax = Math.max(...ends);
+  const span = Math.max(dataMax - dataMin, DAY * 30);
+  // Explicit bounds so the bar value-axis does NOT snap to 0 (the old 1970 bug).
+  const xMin = dataMin - span * 0.02;
+  const xMax = dataMax + span * 0.18; // headroom for the saldo chips
+
+  const colors = items.map((_, i) => ACCOUNT_COLORS[i % ACCOUNT_COLORS.length]);
+  const bars = items.map((a, i) => {
+    let s = starts[i], e = ends[i];
+    if (e - s < DAY * 14) e = s + DAY * 14; // keep very short spans visible
+    return [s, e];
+  });
+
+  const chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: items.map(a => chartAccountLabel(a)),
+      datasets: [{
+        data: bars,
+        backgroundColor: colors.map(c => c + 'cc'),
+        borderColor: colors,
+        borderWidth: 1,
+        borderRadius: 6,
+        borderSkipped: false,
+        barThickness: 24,
+      }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { right: 12 } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (c) => chartAccountLabel(items[c[0].dataIndex]),
+            label: (c) => {
+              const a = items[c.dataIndex];
+              return [
+                `Period: ${formatDate(a.first_date)} → ${formatDate(a.last_date)}`,
+                `Saldo: ${formatMoney(a.balance)}`,
+              ];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          type: 'linear',
+          min: xMin,
+          max: xMax,
+          ticks: { color: '#8b93a8', callback: (v) => tsToYearMonth(v), maxRotation: 45, autoSkip: true, maxTicksLimit: 9 },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        },
+        y: { ticks: { color: '#8b93a8', font: { size: 11 } }, grid: { display: false } },
+      },
+    },
+    plugins: [balanceChipPlugin],
+  });
+  chart.$balanceChips = items.map(a => a.balance != null ? formatMoney(a.balance) : '');
+  state.charts.timeline = chart;
+}
+
+function chartOptions(dataMax = null) {
+  const yScale = {
+    ticks: {
+      color: '#8b93a8',
+      callback: (v) => new Intl.NumberFormat('sv-SE', { notation: 'compact', maximumFractionDigits: 1 }).format(v),
+    },
+    grid: { color: 'rgba(255,255,255,0.05)' },
+    beginAtZero: true,
+  };
+  if (dataMax != null && dataMax > 0) {
+    yScale.suggestedMax = Math.ceil(dataMax * 1.15);
+  }
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -613,16 +1150,34 @@ function chartOptions() {
     },
     scales: {
       x: { ticks: { color: '#8b93a8', maxRotation: 45 }, grid: { color: 'rgba(255,255,255,0.05)' } },
-      y: {
-        ticks: {
-          color: '#8b93a8',
-          callback: (v) => new Intl.NumberFormat('sv-SE', { notation: 'compact', maximumFractionDigits: 1 }).format(v),
-        },
-        grid: { color: 'rgba(255,255,255,0.05)' },
-        beginAtZero: true,
-      },
+      y: yScale,
     },
   };
+}
+
+function chartDataMax(...datasets) {
+  let max = 0;
+  for (const ds of datasets) {
+    for (const v of ds) {
+      const n = Math.abs(Number(v) || 0);
+      if (n > max) max = n;
+    }
+  }
+  return max;
+}
+
+function updateChartExcludeNotes(d) {
+  const ex = d?.chart_excludes;
+  const active = ex && ex.chart_max_amount > 0;
+  const text = active
+    ? 'Stora engångsköp och överföringar exkluderade från graf'
+    : '';
+  ['#chart-exclude-note-net', '#chart-exclude-note-ie', '#chart-exclude-note-exp'].forEach(sel => {
+    const el = $(sel);
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('hidden', !text);
+  });
 }
 
 function renderTransactionTable(rows, total) {
@@ -643,7 +1198,7 @@ function renderTransactionTable(rows, total) {
     <tbody>${rows.map(t => `<tr>
       <td>${formatDate(t.txn_date)}</td>
       <td>${escapeHtml(t.description)}</td>
-      <td>${escapeHtml(t.account)}</td>
+      <td>${formatAccountInlineHtml(t.account, t.account_number)}</td>
       <td><span class="badge">${escapeHtml(t.category)}</span></td>
       <td class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${formatMoney(t.amount)}</td>
     </tr>`).join('')}</tbody></table></div>`;
@@ -675,9 +1230,14 @@ async function recategorize(method) {
   try {
     const data = await api('/api/finance/recategorize?method=' + method, { method: 'POST' });
     if (method === 'ai') {
-      el.textContent = `✨ AI klar: ${data.changed} poster uppdaterade (av ${data.processed || 0} okategoriserade).` + (data.errors?.length ? '\n' + data.errors.join('\n') : '');
+      const breakdown = formatCategoryBreakdown(data.by_category);
+      el.textContent = `✨ AI klar: ${data.changed} poster uppdaterade (av ${data.processed || 0} okategoriserade).`
+        + (data.skipped_uncertain ? ` ${data.skipped_uncertain} lämnades som Övrigt (osäkra).` : '')
+        + breakdown
+        + (data.errors?.length ? '\n' + data.errors.join('\n') : '');
     } else {
-      el.textContent = `↻ Klart: ${data.changed} poster omkategoriserade enligt regler.`;
+      el.textContent = `↻ Klart: ${data.changed} poster omkategoriserade enligt regler.`
+        + (data.internal_transfers ? ` ${data.internal_transfers} interna överföringar identifierade.` : '');
     }
     loadFinance();
   } catch (e) {
@@ -687,26 +1247,236 @@ async function recategorize(method) {
   }
 }
 
-$('#btn-recategorize')?.addEventListener('click', () => recategorize('rules'));
-$('#btn-recategorize-ai')?.addEventListener('click', () => recategorize('ai'));
+function formatCategoryBreakdown(byCategory) {
+  if (!byCategory || !Object.keys(byCategory).length) return '';
+  const lines = Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([c, n]) => `  ${c}: ${n}`);
+  return '\n\nPer kategori:\n' + lines.join('\n');
+}
 
-$('#fin-filter-apply')?.addEventListener('click', () => { readFinanceFiltersFromUI(); loadFinance(); });
+async function ensureFinanceCategories() {
+  if (state.financeCategories.length) return state.financeCategories;
+  const data = await api('/api/finance/categories');
+  state.financeCategories = data.categories || [];
+  return state.financeCategories;
+}
+
+function categoryOptions(selected = '') {
+  const cats = state.financeCategories.length ? state.financeCategories : ['Övrigt'];
+  return cats.map(c => `<option value="${escapeHtml(c)}"${c === selected ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
+}
+
+// ── AI categorization (batch + pause) ───────────────────────────────
+const aiState = {
+  running: false,
+  paused: false,
+  total: 0,
+  processed: 0,
+  changed: 0,
+  skipped: 0,
+  byCategory: {},
+  errors: [],
+  retries: 0,
+};
+
+function showAiPanel(show) {
+  $('#ai-categorize-panel')?.classList.toggle('hidden', !show);
+}
+
+function updateAiPanelUI() {
+  const pct = aiState.total ? Math.round((aiState.processed / aiState.total) * 100) : 0;
+  $('#ai-progress-fill').style.width = pct + '%';
+  $('#ai-counter').textContent = `${aiState.processed} / ${aiState.total}`;
+  $('#ai-remaining').textContent = `${Math.max(0, aiState.total - aiState.processed)} kvar i kö`;
+  $('#ai-btn-pause')?.classList.toggle('hidden', !aiState.running || aiState.paused);
+  $('#ai-btn-resume')?.classList.toggle('hidden', !aiState.paused);
+}
+
+function renderAiResult() {
+  const el = $('#ai-result');
+  if (!el) return;
+  el.classList.remove('hidden');
+  const rows = Object.entries(aiState.byCategory).sort((a, b) => b[1] - a[1]);
+  const table = rows.length
+    ? `<table><thead><tr><th>Kategori</th><th>Antal</th></tr></thead><tbody>${
+        rows.map(([c, n]) => `<tr><td>${escapeHtml(c)}</td><td>${n}</td></tr>`).join('')
+      }</tbody></table>`
+    : '';
+  el.innerHTML = `
+    <strong>Resultat:</strong> ${aiState.changed} kategoriserade, ${aiState.skipped} lämnades som Övrigt (osäkra).
+    ${table}
+    ${aiState.errors.length ? `<div class="ai-errors">${escapeHtml(aiState.errors.join('\n'))}</div>` : ''}`;
+}
+
+function mergeAiByCategory(src) {
+  if (!src) return;
+  for (const [c, n] of Object.entries(src)) {
+    aiState.byCategory[c] = (aiState.byCategory[c] || 0) + n;
+  }
+}
+
+async function runAiCategorization() {
+  if (aiState.running && !aiState.paused) return;
+  await ensureFinanceCategories();
+  showAiPanel(true);
+  $('#ai-result')?.classList.add('hidden');
+  $('#process-result').textContent = '';
+
+  if (aiState.paused) {
+    aiState.paused = false;
+    aiState.retries = 0;
+  } else {
+    const queue = await api('/api/finance/ai/queue');
+    if (!queue.total) {
+      $('#ai-current').textContent = 'Inga okategoriserade transaktioner (alla är Övrigt och ej manuella).';
+      aiState.running = false;
+      return;
+    }
+    aiState.total = queue.total;
+    aiState.processed = 0;
+    aiState.changed = 0;
+    aiState.skipped = 0;
+    aiState.byCategory = {};
+    aiState.errors = [];
+    aiState.retries = 0;
+  }
+
+  aiState.running = true;
+  updateAiPanelUI();
+
+  while (aiState.running && !aiState.paused) {
+    try {
+      const batch = await api('/api/finance/ai/batch', { method: 'POST' });
+      if (batch.current) $('#ai-current').textContent = 'Kategoriserar: ' + batch.current;
+      if (batch.ok && batch.batch_size) {
+        aiState.changed += batch.changed || 0;
+        aiState.skipped += (batch.skipped_uncertain || []).length;
+        mergeAiByCategory(batch.by_category);
+        aiState.retries = 0;
+      }
+      if (typeof batch.remaining === 'number' && aiState.total) {
+        aiState.processed = Math.max(aiState.processed, aiState.total - batch.remaining);
+      } else if (batch.ok && batch.batch_size) {
+        aiState.processed += batch.batch_size;
+      }
+      if (batch.errors?.length) aiState.errors.push(...batch.errors);
+      aiState.total = Math.max(aiState.total, aiState.processed + (batch.remaining || 0));
+      updateAiPanelUI();
+
+      if (batch.done || !batch.batch_size) {
+        aiState.running = false;
+        $('#ai-current').textContent = 'Klar!';
+        renderAiResult();
+        loadFinance();
+        break;
+      }
+      if (!batch.ok && batch.errors?.length) {
+        aiState.retries += 1;
+        $('#ai-current').textContent = `Batchfel — försöker igen (${aiState.retries}/8)…`;
+        if (aiState.retries > 8) {
+          aiState.running = false;
+          $('#ai-current').textContent = 'Stoppad efter upprepade batchfel.';
+          renderAiResult();
+          loadFinance();
+          break;
+        }
+        await new Promise(r => setTimeout(r, 2000));
+        continue;
+      }
+      await new Promise(r => setTimeout(r, 300));
+    } catch (e) {
+      aiState.errors.push(e.message);
+      aiState.retries += 1;
+      $('#ai-current').textContent = `Fel — försöker igen (${aiState.retries}/8)…`;
+      await new Promise(r => setTimeout(r, 2500));
+      if (aiState.retries > 8) {
+        aiState.running = false;
+        renderAiResult();
+        loadFinance();
+        break;
+      }
+    }
+  }
+}
+
+function pauseAiCategorization() {
+  if (!aiState.running) return;
+  aiState.paused = true;
+  aiState.running = false;
+  updateAiPanelUI();
+  const saved = aiState.changed;
+  const left = Math.max(0, aiState.total - aiState.processed);
+  const msg = saved
+    ? `${saved} transaktioner är redan sparade. ${left} återstår i kö.\n\nVill du stoppa här? (Sparade ändringar behålls.)`
+    : `Inget sparat ännu. ${left} återstår.\n\nVill du avbryta?`;
+  if (confirm(msg)) {
+    $('#ai-current').textContent = `Pausad — ${saved} sparade, ${left} kvar.`;
+    renderAiResult();
+    loadFinance();
+  } else {
+    aiState.paused = false;
+    runAiCategorization();
+  }
+}
+
+$('#btn-recategorize')?.addEventListener('click', () => recategorize('rules'));
+$('#btn-recategorize-ai')?.addEventListener('click', () => runAiCategorization());
+$('#ai-btn-pause')?.addEventListener('click', pauseAiCategorization);
+$('#ai-btn-resume')?.addEventListener('click', () => runAiCategorization());
+$('#ai-btn-close')?.addEventListener('click', () => {
+  if (aiState.running) {
+    if (!confirm('AI-körning pågår — pausa och stäng?')) return;
+    aiState.paused = true;
+    aiState.running = false;
+  }
+  showAiPanel(false);
+});
+$('#btn-go-categories')?.addEventListener('click', () => setPage('categories'));
+
+// ── Filter drawer ─────────────────────────────────────────────────────
+function openFilterDrawer() {
+  $('#filter-drawer')?.classList.add('open');
+  $('#filter-drawer-backdrop')?.classList.add('open');
+}
+function closeFilterDrawer() {
+  $('#filter-drawer')?.classList.remove('open');
+  $('#filter-drawer-backdrop')?.classList.remove('open');
+}
+$('#filter-fab')?.addEventListener('click', openFilterDrawer);
+$('#btn-open-filters-top')?.addEventListener('click', openFilterDrawer);
+$('#filter-drawer-close')?.addEventListener('click', closeFilterDrawer);
+$('#filter-drawer-backdrop')?.addEventListener('click', closeFilterDrawer);
+
+const applyFilters = () => { readFinanceFiltersFromUI(); loadFinance(); };
+
+$('#fin-filter-apply')?.addEventListener('click', () => { applyFilters(); closeFilterDrawer(); });
 $('#fin-filter-reset')?.addEventListener('click', () => {
-  state.financeFilters = { account: '', year: '', category: '', typ: '', dateFrom: '', dateTo: '', search: '', excludeOverforing: true, maxAmount: 0, sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50 };
+  state.financeFilters = { account: '', year: '', category: '', typ: '', dateFrom: '', dateTo: '', search: '', excludeOverforing: true, maxAmount: 0, chartMaxAmount: 100000, sortBy: 'txn_date', sortDir: 'desc', offset: 0, limit: 50 };
   ['fin-filter-account','fin-filter-year','fin-filter-category','fin-filter-typ','fin-filter-from','fin-filter-to','fin-filter-search'].forEach(id => { const el = $('#' + id); if (el) el.value = ''; });
   if ($('#fin-filter-no-transfer')) $('#fin-filter-no-transfer').checked = true;
   if ($('#fin-filter-cap')) $('#fin-filter-cap').checked = false;
   loadFinance();
 });
-$('#fin-filter-cap')?.addEventListener('change', () => { readFinanceFiltersFromUI(); loadFinance(); });
-$('#fin-filter-search')?.addEventListener('keydown', e => { if (e.key === 'Enter') { readFinanceFiltersFromUI(); loadFinance(); } });
+// Auto-apply on any filter control change (selects, dates, toggles).
+['fin-filter-account','fin-filter-year','fin-filter-category','fin-filter-typ','fin-filter-from','fin-filter-to','fin-filter-no-transfer','fin-filter-cap'].forEach(id => {
+  $('#' + id)?.addEventListener('change', applyFilters);
+});
+$('#fin-filter-search')?.addEventListener('keydown', e => { if (e.key === 'Enter') applyFilters(); });
+$('#fin-filter-search')?.addEventListener('input', debounce(applyFilters, 400));
+
+function formatImportSummary(proc) {
+  if (!proc) return '';
+  let s = `${proc.transactions_added} nya transaktioner`;
+  if (proc.transactions_skipped) s += `, ${proc.transactions_skipped} dubbletter hoppades över`;
+  return s;
+}
 
 async function processBankFiles() {
   const el = $('#process-result');
   el.textContent = 'Importerar…';
   try {
     const data = await api('/api/finance/process', { method: 'POST' });
-    el.textContent = `Klart (${data.mode}): ${data.files_processed} filer, ${data.transactions_added} transaktioner.\n${(data.processed||[]).join('\n')}${data.errors?.length ? '\nFel:\n' + data.errors.join('\n') : ''}`;
+    const summary = formatImportSummary(data);
+    el.textContent = `Klart (${data.mode}): ${data.files_processed} filer, ${summary}.\n${(data.processed||[]).join('\n')}${data.errors?.length ? '\nFel:\n' + data.errors.join('\n') : ''}`;
     loadFinance();
     if (state.page === 'home') loadHome();
   } catch (e) { el.textContent = 'Fel: ' + e.message; }
@@ -719,7 +1489,7 @@ function openManualTxnModal() {
       <div class="field"><label class="label">Datum</label><input class="input" type="date" name="txn_date" required value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="field"><label class="label">Belopp</label><input class="input" type="number" step="0.01" name="amount" required placeholder="45000"></div>
       <div class="field"><label class="label">Konto</label><input class="input" name="account" list="account-list-dl" required placeholder="Lysa Patrik"></div>
-      <datalist id="account-list-dl">${accounts.map(a => `<option value="${escapeHtml(a)}">`).join('')}</datalist>
+      <datalist id="account-list-dl">${accounts.map(a => `<option value="${escapeHtml(a)}" label="${escapeHtml(formatAccountText(a))}">`).join('')}</datalist>
       <div class="field"><label class="label">Beskrivning</label><input class="input" name="description"></div>
       <div class="field"><label class="label">Saldo (valfritt)</label><input class="input" type="number" step="0.01" name="balance"></div>
       <div class="field"><label class="label">Kategori (valfritt)</label><input class="input" name="category" placeholder="Lysa"></div>
@@ -747,11 +1517,13 @@ let uploadQueue = [];
 function renderKnownAccounts(folders) {
   const el = $('#known-accounts');
   if (!el) return;
-  const names = (folders || []).map(f => f.name);
-  if (!names.length) { el.innerHTML = ''; return; }
+  if (!(folders || []).length) { el.innerHTML = ''; return; }
   const pending = (folders || []).filter(f => f.pending_files > 0);
   el.innerHTML =
-    'Kända konton: ' + names.map(n => `<span class="acc-tag">${escapeHtml(n)}</span>`).join('') +
+    'Kända konton: ' + folders.map(f => {
+      const label = formatAccountText(f.name, f.account_number);
+      return `<span class="acc-tag" title="${escapeHtml(label)}">${formatAccountInlineHtml(f.name, f.account_number)}</span>`;
+    }).join('') +
     (pending.length ? `<br><span style="color:var(--accent-warm)">${pending.reduce((s, f) => s + f.pending_files, 0)} fil(er) väntar på import</span>` : '');
 }
 
@@ -827,7 +1599,7 @@ function openAccountPickerModal(file, detection, forcedAccount = null) {
       const hit = candidates.find(c => c.account === acc);
       const isSuggested = acc === suggested;
       return `<button type="button" class="account-pick-btn ${isSuggested ? 'suggested' : ''}" data-account="${escapeHtml(acc)}">
-        <span>${escapeHtml(acc)}${isSuggested ? ' ✓ föreslagen' : ''}</span>
+        <span>${formatAccountInlineHtml(acc)}${isSuggested ? ' ✓ föreslagen' : ''}</span>
         ${hit ? `<span class="score">${Math.round(hit.score * 100)}%</span>` : ''}
       </button>`;
     }).join('');
@@ -912,7 +1684,7 @@ async function processUploadFile(file, forcedAccount = null) {
     let msg = `✓ ${file.name} → ${res.account}/${res.filename}`;
     if (res.auto_detected) msg += ' (auto-detekterat)';
     if (res.process) {
-      msg += `\n${res.process.transactions_added} transaktioner importerade.`;
+      msg += `\n${formatImportSummary(res.process)}.`;
     }
     resultEl.textContent = msg;
     loadFinance();
@@ -940,9 +1712,11 @@ async function loadSettings() {
     if ($('#cfg-ai-model')) $('#cfg-ai-model').value = cfg.ai_model || '';
     const mapEl = $('#folder-map-editor');
     const entries = Object.entries(cfg.folder_map || {});
+    const numbers = cfg.account_numbers || {};
     mapEl.innerHTML = entries.map(([name, id], i) =>
-      `<div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+      `<div class="field folder-map-row">
         <input class="input" data-map-name="${i}" value="${escapeHtml(name)}" placeholder="Kontonamn">
+        <input class="input" data-map-number="${i}" value="${escapeHtml(numbers[name] || '')}" placeholder="Kontonummer (valfritt)">
         <input class="input" data-map-id="${i}" value="${escapeHtml(id)}" placeholder="Mapp-ID / lokal mapp">
       </div>`
     ).join('');
@@ -958,10 +1732,15 @@ async function loadSettings() {
 async function saveSettings() {
   const count = +($('#folder-map-editor').dataset.count || 0);
   const folder_map = {};
+  const account_numbers = {};
   for (let i = 0; i < count; i++) {
     const name = $(`[data-map-name="${i}"]`)?.value?.trim();
     const id = $(`[data-map-id="${i}"]`)?.value?.trim();
-    if (name) folder_map[name] = id || '';
+    const num = $(`[data-map-number="${i}"]`)?.value?.trim();
+    if (name) {
+      folder_map[name] = id || '';
+      if (num) account_numbers[name] = num;
+    }
   }
   const body = {
     storage_mode: $('#storage-gdrive').classList.contains('active') ? 'gdrive' : 'local',
@@ -973,6 +1752,7 @@ async function saveSettings() {
     ai_api_key: $('#cfg-ai-key')?.value.trim() || '',
     ai_model: $('#cfg-ai-model')?.value.trim() || '',
     folder_map,
+    account_numbers,
   };
   await api('/api/finance/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   $('#settings-saved').textContent = 'Sparat ✓';
@@ -1012,12 +1792,223 @@ $('#btn-add-folder')?.addEventListener('click', () => {
   const mapEl = $('#folder-map-editor');
   const i = +(mapEl.dataset.count || 0);
   mapEl.insertAdjacentHTML('beforeend',
-    `<div class="field" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem">
+    `<div class="field folder-map-row">
       <input class="input" data-map-name="${i}" placeholder="Kontonamn">
+      <input class="input" data-map-number="${i}" placeholder="Kontonummer (valfritt)">
       <input class="input" data-map-id="${i}" placeholder="Mapp-ID">
     </div>`);
   mapEl.dataset.count = i + 1;
 });
+
+// ── Categories page ─────────────────────────────────────────────────
+function catDateRange() {
+  const v = state.categoryView;
+  if (v.range === 'month') {
+    const last = new Date(v.year, v.month, 0).getDate();
+    return {
+      date_from: `${v.year}-${String(v.month).padStart(2, '0')}-01`,
+      date_to: `${v.year}-${String(v.month).padStart(2, '0')}-${String(last).padStart(2, '0')}`,
+    };
+  }
+  return { year: v.year };
+}
+
+function initCategoryControls() {
+  const yearSel = $('#cat-year');
+  const monthSel = $('#cat-month');
+  if (!yearSel || yearSel.dataset.inited) return;
+  yearSel.dataset.inited = '1';
+  const now = new Date().getFullYear();
+  for (let y = now; y >= now - 8; y--) {
+    yearSel.insertAdjacentHTML('beforeend', `<option value="${y}">${y}</option>`);
+  }
+  const months = ['Jan','Feb','Mar','Apr','Maj','Jun','Jul','Aug','Sep','Okt','Nov','Dec'];
+  months.forEach((m, i) => monthSel.insertAdjacentHTML('beforeend', `<option value="${i + 1}">${m}</option>`));
+  yearSel.value = state.categoryView.year;
+  monthSel.value = state.categoryView.month;
+
+  $('#cat-range-month')?.addEventListener('click', () => {
+    state.categoryView.range = 'month';
+    $('#cat-range-month')?.classList.add('active');
+    $('#cat-range-year')?.classList.remove('active');
+    $('#cat-month')?.classList.remove('hidden');
+    loadCategoriesPage();
+  });
+  $('#cat-range-year')?.addEventListener('click', () => {
+    state.categoryView.range = 'year';
+    $('#cat-range-year')?.classList.add('active');
+    $('#cat-range-month')?.classList.remove('active');
+    $('#cat-month')?.classList.add('hidden');
+    loadCategoriesPage();
+  });
+  yearSel.addEventListener('change', () => { state.categoryView.year = +yearSel.value; loadCategoriesPage(); });
+  monthSel.addEventListener('change', () => { state.categoryView.month = +monthSel.value; loadCategoriesPage(); });
+  $('#cat-refresh')?.addEventListener('click', loadCategoriesPage);
+  $('#cat-filter-category')?.addEventListener('change', () => {
+    state.categoryView.category = $('#cat-filter-category').value;
+    state.categoryView.offset = 0;
+    loadCategoryTransactions();
+  });
+  $('#cat-only-ovrigt')?.addEventListener('change', () => {
+    state.categoryView.onlyOvrigt = $('#cat-only-ovrigt').checked;
+    state.categoryView.offset = 0;
+    loadCategoryTransactions();
+  });
+  $('#cat-search')?.addEventListener('input', debounce(() => {
+    state.categoryView.search = $('#cat-search').value.trim();
+    state.categoryView.offset = 0;
+    loadCategoryTransactions();
+  }, 350));
+}
+
+function renderCategoryStatsTable(items) {
+  const el = $('#cat-stats-table');
+  if (!el) return;
+  if (!items?.length) { el.innerHTML = '<p class="empty">Ingen data för vald period.</p>'; return; }
+  el.innerHTML = `<div class="cat-stats-grid">${items.map(it => `
+    <div class="cat-stat-row">
+      <span class="cat-name">${escapeHtml(it.category)}</span>
+      <span class="cat-meta">${it.count} st · ${formatMoney(it.total)}</span>
+    </div>`).join('')}</div>`;
+}
+
+function renderCategoryBreakdownChart(items, subtitle) {
+  if (typeof Chart === 'undefined') return;
+  destroyChart('catBreakdown');
+  const ctx = document.getElementById('chart-cat-breakdown');
+  if (!ctx) return;
+  $('#cat-chart-subtitle').textContent = subtitle || '';
+  const sorted = [...(items || [])].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+  const labels = sorted.map(i => i.category);
+  const values = sorted.map(i => Math.abs(i.total));
+  state.charts.catBreakdown = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Utgifter (kr)',
+        data: values,
+        backgroundColor: 'rgba(124, 108, 255, 0.65)',
+        borderRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b93a8', maxRotation: 55, minRotation: 35, font: { size: 10 } }, grid: { display: false } },
+        y: {
+          ticks: { color: '#8b93a8', callback: v => new Intl.NumberFormat('sv-SE', { notation: 'compact' }).format(v) },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+          beginAtZero: true,
+        },
+      },
+    },
+  });
+}
+
+async function loadCategoryTransactions() {
+  const v = state.categoryView;
+  const range = catDateRange();
+  const params = new URLSearchParams({
+    limit: v.limit,
+    offset: v.offset,
+    sort_by: 'txn_date',
+    sort_dir: 'desc',
+    exclude_overforing: 'true',
+  });
+  if (range.year) params.set('year', range.year);
+  if (range.date_from) { params.set('date_from', range.date_from); params.set('date_to', range.date_to); }
+  if (v.onlyOvrigt) params.set('category', 'Övrigt');
+  else if (v.category) params.set('category', v.category);
+  if (v.search) params.set('search', v.search);
+
+  const data = await api('/api/finance/transactions?' + params);
+  renderCategoryTxnTable(data.items || [], data.total || 0);
+}
+
+function renderCategoryTxnTable(rows, total) {
+  const wrap = $('#cat-txn-table');
+  if (!wrap) return;
+  if (!rows.length) {
+    wrap.innerHTML = '<p class="empty">Inga transaktioner matchar.</p>';
+    $('#cat-pagination').innerHTML = '';
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Datum</th><th>Beskrivning</th><th>Konto</th><th>Kategori</th><th>Belopp</th></tr></thead>
+    <tbody>${rows.map(t => `<tr data-txn-id="${t.id}">
+      <td>${formatDate(t.txn_date)}</td>
+      <td>${escapeHtml(t.description)}</td>
+      <td>${formatAccountInlineHtml(t.account, t.account_number)}</td>
+      <td><select class="select cat-select" data-cat-edit="${t.id}">${categoryOptions(t.category)}</select></td>
+      <td class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${formatMoney(t.amount)}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+
+  wrap.querySelectorAll('[data-cat-edit]').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.dataset.catEdit;
+      const category = sel.value;
+      try {
+        await api(`/api/finance/transactions/${id}/category`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ category }),
+        });
+        sel.closest('tr')?.classList.add('row-saved');
+        loadCategoriesPage();
+      } catch (e) {
+        alert('Kunde inte spara: ' + e.message);
+      }
+    });
+  });
+
+  const v = state.categoryView;
+  const pages = Math.ceil(total / v.limit);
+  const page = Math.floor(v.offset / v.limit) + 1;
+  const pag = $('#cat-pagination');
+  if (pages <= 1) { pag.innerHTML = ''; return; }
+  pag.innerHTML = `
+    <button class="btn btn-sm" ${page <= 1 ? 'disabled' : ''} id="cat-prev">← Föreg</button>
+    <span style="font-size:0.8rem;color:var(--text-muted);align-self:center">Sida ${page}/${pages} (${total} st)</span>
+    <button class="btn btn-sm" ${page >= pages ? 'disabled' : ''} id="cat-next">Nästa →</button>`;
+  $('#cat-prev')?.addEventListener('click', () => { v.offset = Math.max(0, v.offset - v.limit); loadCategoryTransactions(); });
+  $('#cat-next')?.addEventListener('click', () => { v.offset += v.limit; loadCategoryTransactions(); });
+}
+
+async function loadCategoriesPage(skipStats = false) {
+  initCategoryControls();
+  await ensureFinanceCategories();
+  const catSel = $('#cat-filter-category');
+  if (catSel && !catSel.dataset.filled) {
+    catSel.dataset.filled = '1';
+    catSel.innerHTML = '<option value="">Alla kategorier</option>' + categoryOptions();
+  }
+
+  const v = state.categoryView;
+  const range = catDateRange();
+  const statsParams = new URLSearchParams({ expenses_only: 'true' });
+  if (range.year) statsParams.set('year', range.year);
+  if (range.date_from) {
+    statsParams.set('year', v.year);
+    statsParams.set('month', v.month);
+  }
+
+  try {
+    if (!skipStats) {
+      const stats = await api('/api/finance/categories/stats?' + statsParams);
+      const subtitle = v.range === 'month'
+        ? `${v.year}-${String(v.month).padStart(2, '0')} (endast utgifter)`
+        : `${v.year} (endast utgifter)`;
+      renderCategoryStatsTable(stats.items);
+      renderCategoryBreakdownChart(stats.items, subtitle);
+    }
+    await loadCategoryTransactions();
+  } catch (e) {
+    $('#cat-stats-table').innerHTML = '<p class="error">Fel: ' + escapeHtml(e.message) + '</p>';
+  }
+}
 
 // ── Init ─────────────────────────────────────────────────────────────
 bindTaskFilters();

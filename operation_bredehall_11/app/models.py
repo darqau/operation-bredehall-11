@@ -107,3 +107,21 @@ class FinanceTransaction(Base):
     __table_args__ = (
         Index("ix_finance_account_date", "account", "txn_date"),
     )
+
+
+class FinanceLoan(Base):
+    """Manuellt underhållna lån/skulder (t.ex. bolån från bank-app)."""
+    __tablename__ = "finance_loans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False, default="Bolån")
+    account_number: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    typ: Mapped[str] = mapped_column(String(64), nullable=False, default="bolån")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<FinanceLoan(id={self.id}, account={self.account_number!r}, amount={self.amount})>"

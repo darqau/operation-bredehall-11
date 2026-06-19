@@ -15,6 +15,39 @@ from app.routers import tasks as tasks_router
 from app.routers import calendar as calendar_router
 from app.routers import ai as ai_router
 from app.seed.seed_tasks import seed_if_empty
+from app.seed.seed_loans import seed_loans_if_empty
+
+
+def _migrate_finance_on_startup() -> None:
+    """Persist config renames and fix mis-filed Patrik Nordea transactions."""
+    import json
+
+    from app.crud_finance import migrate_house_purchase_duplicates, migrate_patrik_lonekonto_transactions
+    from app.database import SessionLocal
+    from app.services.finance.config import CONFIG_PATH, get_finance_config, migrate_legacy_config, save_finance_config
+
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                stored = json.load(f)
+            migrated = migrate_legacy_config(dict(stored))
+            if migrated.get("folder_map") != stored.get("folder_map") or migrated.get("account_numbers") != stored.get(
+                "account_numbers"
+            ):
+                save_finance_config(migrated)
+        except (json.JSONDecodeError, OSError):
+            pass
+    else:
+        get_finance_config()
+
+    db = SessionLocal()
+    try:
+        migrate_patrik_lonekonto_transactions(db)
+        migrate_house_purchase_duplicates(db)
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
 
 # Sökväg till statiska filer (frontend)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -23,10 +56,30 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Vid start: skapa tabeller, seed om tom."""
+    """Vid start: skapa tabeller, seed om tom, märk interna överföringar."""
     init_db()
     seed_if_empty()
+    seed_loans_if_empty()
+    _migrate_finance_on_startup()
+    _tag_internal_transfers_on_startup()
     yield
+
+
+def _tag_internal_transfers_on_startup() -> None:
+    """Backfill: categorise historical transfers between own accounts as
+    "Överföring" so they don't count as income/expense. Idempotent and safe to
+    run on every boot."""
+    from app.crud_finance import detect_internal_transfers
+    from app.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        detect_internal_transfers(db)
+    except Exception:
+        # Never block startup on a best-effort backfill.
+        db.rollback()
+    finally:
+        db.close()
 
 
 app = FastAPI(

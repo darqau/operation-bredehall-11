@@ -27,6 +27,7 @@ CATEGORIES: List[str] = [
     "Träning",
     "Shopping & Kläder",
     "Hem & Fritid",
+    "Husdjur",
     "Streaming & Media",
     "Resor & Semester",
     "Kollektivtrafik & Taxi",
@@ -36,7 +37,9 @@ CATEGORIES: List[str] = [
     "Sparande",
     "Barn",
     "Donationer",
+    "Swish (privat)",
     "CSN (Återbetalning)",
+    "Bostadsköp (engång)",
     "Överföring",
     "Övrigt",
 ]
@@ -65,12 +68,13 @@ def _match(pattern: str, text: str) -> bool:
 
 # Ordered most-specific → least-specific. First hit wins.
 CATEGORY_RULES: List[Tuple[str, str]] = [
+    (r"slutlikvid", "Bostadsköp (engång)"),
     # Income-ish (only applied to positive amounts unless typ says otherwise)
     (r"\blön\b|\blöne|salary|utbetalning lön", "Lön"),
     (r"\bcsn\b.*utbetal|studiemedel|studiebidrag|försäkringskassan|barnbidrag|bostadsbidrag|a-kassa|akassa", "Bidrag"),
     (r"\bränta\b|utdelning|återbäring|avkastning|skatteåterbäring|överskjutande skatt", "Ränta/Avkastning"),
     # Groceries
-    (r"\bica\b|\bcoop\b|hemköp|hemkop|willys|lidl|city gross|citygross|mathem|tempo|pressbyrå|pressbyran|7-eleven|7eleven|\blivs\b|saluhall|matse|matsmart|handlar'?n|närlivs|nara |stora coop|\bmaxi\b|netto|x:?-?tra|foodmarket|frukt ab|tazeli|biskopsgaard|godis|fisk|bageri", "Livsmedel"),
+    (r"\bica\b|\bcoop\b|hemköp|hemkop|willys|lidl|city gross|citygross|mathem|tempo|pressbyrå|pressbyran|7-eleven|7eleven|\blivs\b|saluhall|matse|matsmart|handlar'?n|närlivs|nara |stora coop|\bmaxi\b|netto|x:?-?tra|foodmarket|frukt ab|tazeli|biskopsgaard|godis|fisk|bageri|market 24|24 7|oob |\boob\b|4 gott|zettle|izettle", "Livsmedel"),
     # Restaurants
     (r"restaurang|pizza|pizzeria|sushi|foodora|max burger|o'?learys|mcdonald|burger king|espresso house|\bwolt\b|starbucks|subway|\bkfc\b|chopchop|café|cafe|bistro|\bkrog\b|thai|kebab|nystekt|gateau|waynes|barista|deli|uber\s*eats|ubereats|systrarna|brödernas|taco|sushibar|olstugan|\bpub\b|tullen|food", "Restaurang & Uteät"),
     (r"systembolaget|vinmonopolet", "Systembolaget"),
@@ -80,17 +84,19 @@ CATEGORY_RULES: List[Tuple[str, str]] = [
     # Insurance
     (r"lassie|agria|folksam|\btrygg\b|trygg-hansa|if skade|if skadeförs|svedea|moderna försäkr|hedvig|tandvård försäkr|nordea liv|livförsäkring|länsförsäkring|lansforsakring|dina försäkr|gjensidige|ica försäkr", "Försäkring"),
     (r"frisör|frisor|klippning|salong|barber|hudvård|hudvard|massage|nagel|skönhetss|skonhet|spa\b", "Skönhet & Tjänster"),
-    (r"apotek|kronans|\bdoz\b|apotea|apoteket|lloyds|hjärtat|doktor|\bkry\b|min doktor|1177|vårdcentral|vardcentral|tandläkare|tandlakare|folktandvård|frisktandvård|frisktandv|capio|aleris|sjukhus|optiker|synsam|specsavers|lentiamo|smarteyes|synoptik|medicin", "Hälsa & Sjukvård"),
-    (r"\bgym\b|friskis|\bsats\b|nordic wellness|fitness24seven|fitness 24|gymgrossist|actic|24seven|stc träning|crossfit|padel|klättr", "Träning"),
+    (r"apotek|kronans|\bdoz\b|apotea|apoteket|lloyds|hjärtat|doktor|\bkry\b|min doktor|1177|vårdcentral|vardcentral|tandläkare|tandlakare|folktandvård|frisktandvård|frisktandv|capio|aleris|sjukhus|optiker|synsam|specsavers|lentiamo|smarteyes|synoptik|medicin|västra götal|vastra gotal|regionen|patientavgift|närhälsan|narhalsan", "Hälsa & Sjukvård"),
+    (r"\bgym\b|friskis|\bsats\b|nordic wellness|fitness24seven|fitness 24|gymgrossis|actic|24seven|stc träning|crossfit|padel|klättr", "Träning"),
+    # Pets
+    (r"arken zoo|djurmagazinet|zoo\.se|dogman|furry fam|din veterinär|veterinär|veterinar|\bmusti\b|vetzoo|djuraffär|hundfoder|kattfoder|\bzoo\b", "Husdjur"),
     # Shopping
-    (r"klarna|\bh&m\b|\bhm\b|zara|stadium|intersport|lager 157|åhléns|ahlens|lindex|kappahl|cubus|dressmann|gina tricot|mq\b|ellos|nelly|boozt|zalando|new yorker|uniqlo|nike|adidas|kicks|lyko|sephora|normal\b|flying tiger|vinted|temu|shein|wish\.com|aliexpress|amazon", "Shopping & Kläder"),
-    (r"ikea|jysk|rusta|clas ohlson|claes ohlson|kjell ?& ?co|kjell o co|panduro|blomsterland|plantagen|bauhaus|hornbach|biltema|\bjula\b|granngård|byggmax|hornbach|k-rauta|krauta|ahlsell|järnia|hemtex|mio\b| em home|royal design|akademibokhand|adlibris|bokus|bonnier|bokhandel", "Hem & Fritid"),
-    (r"netflix|spotify|\bhbo\b|max\.com|help\.max|disney|youtube|prime video|amazon prime|\bsteam\b|steamgames|nextory|storytel|sf bio|filmstaden|ticketmaster|nintendo|playstation|patreon|nowo|viaplay|tv4 play|c more|cmore|audible|apple\.com/bill|google one|google.*storage|google play|icloud|microsoft|adobe|twitch|onlyfans|notion|chatgpt|openai|anthropic|claude", "Streaming & Media"),
+    (r"klarna|\bh&m\b|\bhm\b|zara|stadium|intersport|lager 157|åhléns|ahlens|lindex|kappahl|cubus|dressmann|gina tricot|mq\b|ellos|nelly|boozt|zalando|new yorker|uniqlo|nike|adidas|kicks|lyko|sephora|normal\b|flying tiger|vinted|temu|shein|wish\.com|aliexpress|amazon|riverty|dollarstore|dollar store|second han|jollyroom|babyworld", "Shopping & Kläder"),
+    (r"ikea|jysk|rusta|clas ohlson|claes ohlson|kjell ?& ?co|kjell o co|panduro|blomsterland|plantagen|bauhaus|hornbach|biltema|\bjula\b|granngård|byggmax|hornbach|k-rauta|krauta|ahlsell|järnia|hemtex|mio\b| em home|royal design|akademibokhand|adlibris|bokus|bonnier|bokhandel|liseberg|gröna lund|grona lund|universeum|nöjespark", "Hem & Fritid"),
+    (r"netflix|spotify|\bhbo\b|max\.com|help\.max|disney|youtube|prime video|amazon prime|\bsteam\b|steamgames|nextory|storytel|sf bio|filmstaden|ticketmaster|nintendo|playstation|patreon|nowo|viaplay|tv4 play|c more|cmore|audible|apple\.com/bill|\bgoogle\b|icloud|microsoft|adobe|twitch|onlyfans|notion|chatgpt|openai|anthropic|claude", "Streaming & Media"),
     (r"hotell|booking\.com|hotels\.com|airbnb|scandic|strawberry|elite hotel|first hotel|\bflyg\b|\bsas\b|norwegian|ryanair|swedavia|arlanda|landvetter|tui\b|ving\b|apollo|resia|trivago|expedia", "Resor & Semester"),
-    (r"västtrafik|vasttrafik|\bsj\b|skånetrafik|skanetrafik|\bsl\b|mälartåg|malartag|länstrafik|\bvy\b|taxi|uber\b|\bbolt\b|cabonline|taxi kurir|taxi göteborg|flixbus", "Kollektivtrafik & Taxi"),
-    (r"bensin|circle k|circlek|\bingo\b|okq8|preem\b|tankning|\bst1\b|tanka\b|qstar|parkering|easypark|\baimo\b|apcoa|p-bolaget|q-park|bilprovning|besiktning|trängselskat|trangselskat|transportstyrelsen|ziklo|incharge|laddning|elbil|mekonomen|biltema bil|däck|hedin|verkstad|bilia|bildelar|autoexperten|fordon|car to go|sunfleet|m sverige|bilpool", "Bil & Transport"),
+    (r"västtrafik|vasttrafik|\bsj\b|skånetrafik|skanetrafik|\bsl\b|mälartåg|malartag|länstrafik|\bvy\b|taxi|uber\b|\bbolt\b|cabonline|taxi kurir|taxi göteborg|flixbus|\bvoi\b|voi se|tier|lime|bird|elsparkcykel", "Kollektivtrafik & Taxi"),
+    (r"bensin|circle k|circlek|\bingo\b|okq8|preem\b|tankning|\bst1\b|tanka\b|qstar|parkering|easypark|\baimo\b|apcoa|p-bolaget|q-park|bilprovning|besiktning|trängselskat|trangselskat|transportstyrelsen|ziklo|incharge|laddning|elbil|mekonomen|biltema bil|däck|hedin|verkstad|bilia|bildelar|autoexperten|fordon|car to go|sunfleet|m sverige|bilpool|digital charging|recharge|fortum charge|virta", "Bil & Transport"),
     (r"telia|telenor|tele2|\btre\b|halebop|bredband|comviq|hallon|vimla|sappa|bahnhof|bredband2|fello|chilimobil|telavox", "Mobil & Bredband"),
-    (r"vardagspaket|\bavgift\b|kortavgift|årsavgift|aviavgift|påminnelseavgift|dröjsmål|bankavgift|nordea.*avgift|swedbank.*avgift|ratsit|open banking", "Bankavgifter"),
+    (r"vardagspaket|\bavgift\b|kortavgift|årsavgift|aviavgift|påminnelseavgift|dröjsmål|bankavgift|nordea.*avgift|swedbank.*avgift|ratsit|open banking|pris internetbet|pris bankkort|pris kort|preliminär skatt|prelimin.r skatt", "Bankavgifter"),
     (r"lysa|savings|sparkonto|fondkonto|avanza|nordnet|isk\b|månadssparande|buffert", "Sparande"),
     (r"\bbvc\b|förskola|forskola|fritids|barnomsorg|babybjörn|babyland|leksak|toys.?r.?us|lekia|barnens", "Barn"),
     (r"djurens rätt|rädda barnen|radda barnen|läkare utan|unicef|röda kors|roda kors|greenpeace|wwf|amnesty|stadsmission|musikhjälpen|insamling|\bgåva\b|\bbris\b|plan intern|hyresgästför|hyresgastfor|transportarbetar|sv\.? *transp|sv\.? *arbetste|akademiker|fackförbund|fackavgift|a-?kassa|unionen|kommunal\b|if metall", "Donationer"),
@@ -111,7 +117,8 @@ def classify_typ(
 
     transfer_text = _match(
         r"egen överföring|överföring mellan|mellan konton|lysa spar|\bsavings\b|"
-        r"överföring \d|överf\b.*spar|spar.*överf|omsättning lån|låneomsättning|oms lån|oms\. lån",
+        r"överföring \d|överf\b.*spar|spar.*överf|omsättning lån|låneomsättning|oms lån|oms\. lån|"
+        r"extraamortering",
         desc,
     )
     own = own_accounts_regex or ""
@@ -153,10 +160,14 @@ def categorize(
         if _match(pattern, norm):
             # Income rows shouldn't be tagged as an expense category
             if typ == "Inkomst" and label not in (
-                "Lön", "Bidrag", "Ränta/Avkastning", "Inkomst (Swish)", "Sparande", "Donationer",
+                "Lön", "Bidrag", "Ränta/Avkastning", "Inkomst (Swish)", "Sparande", "Donationer", "Husdjur",
             ):
                 continue
             return label
+
+    # Outgoing Swish that didn't match a known merchant = private person-to-person
+    if _match(r"\bswish\b", description or ""):
+        return "Swish (privat)"
 
     if typ == "Inkomst" and amount > 0:
         return "Övrig inkomst"

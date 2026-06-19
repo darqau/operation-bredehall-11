@@ -1,6 +1,6 @@
 """Pydantic-schemas för API (request/response)."""
 from datetime import date, datetime
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -92,6 +92,7 @@ class FinanceManualCreate(BaseModel):
 class FinanceConfigUpdate(BaseModel):
     storage_mode: Optional[str] = None
     folder_map: Optional[dict] = None
+    account_numbers: Optional[dict] = None
     archive_folder_id: Optional[str] = None
     gdrive_credentials_path: Optional[str] = None
     own_accounts_regex: Optional[str] = None
@@ -107,8 +108,10 @@ class FinanceProcessResult(BaseModel):
     mode: str
     files_processed: int
     transactions_added: int
+    transactions_skipped: int = 0
     processed: list
     errors: list
+    internal_transfers: int = 0
 
 
 class FinanceFolderCreate(BaseModel):
@@ -123,3 +126,54 @@ class FinanceUploadResult(BaseModel):
     auto_detected: bool
     detection: Optional[dict] = None
     process: Optional[FinanceProcessResult] = None
+
+
+class FinanceCategoryUpdate(BaseModel):
+    category: str
+
+
+class FinanceAiApplyRequest(BaseModel):
+    mapping: dict
+
+
+class FinanceLoanBase(BaseModel):
+    label: str = "Bolån"
+    account_number: str
+    amount: float
+    typ: str = "bolån"
+    notes: Optional[str] = None
+
+
+class FinanceLoanCreate(FinanceLoanBase):
+    pass
+
+
+class FinanceLoanUpdate(BaseModel):
+    label: Optional[str] = None
+    account_number: Optional[str] = None
+    amount: Optional[float] = None
+    typ: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FinanceLoanResponse(FinanceLoanBase):
+    id: int
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FinanceLoanParseTextRequest(BaseModel):
+    text: str
+
+
+class FinanceLoanUpsertItem(BaseModel):
+    label: str = "Bolån"
+    account_number: str
+    amount: float
+    typ: str = "bolån"
+    notes: Optional[str] = None
+
+
+class FinanceLoanUpsertRequest(BaseModel):
+    loans: List["FinanceLoanUpsertItem"]

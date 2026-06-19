@@ -13,17 +13,35 @@ ACCOUNT_NUMBER_MAP: List[tuple[str, str]] = [
     (r"9735695422", "Lönekonto Swedbank"),
     (r"3100\s*22\s*43645", "Linneas CSN"),
     (r"3100\s*22\s*43661", "Linneas CSN"),
-    (r"1127\s*21\s*36671", "Linneas Lönekonto"),
+    (r"1127\s*21\s*36671", "Patriks Lönekonto"),
     (r"3055\s*01\s*01268", "Linneas Sparkonto"),
     (r"3300", "Lönekonto Swedbank"),
 ]
+
+# Human-readable account numbers for UI (account name → display number)
+ACCOUNT_DISPLAY_NUMBERS: Dict[str, str] = {
+    "Gemensamt Nordea": "1936 20 14939",
+    "Lönekonto Nordea": "920117-1221",
+    "Lönekonto Swedbank": "9735695422",
+    "Linneas CSN": "3100 22 43645",
+    "Patriks Lönekonto": "1127 21 36671",
+    "Linneas Sparkonto": "3055 01 01268",
+}
+
+
+def account_display_number(name: str) -> Optional[str]:
+    """Display number for a configured bank account (from finance_config.json)."""
+    from app.services.finance.config import account_number_for
+
+    num = account_number_for(name)
+    return num or ACCOUNT_DISPLAY_NUMBERS.get(name) or None
 
 ACCOUNT_HINTS: Dict[str, List[str]] = {
     "Gemensamt Nordea": [r"gemensamt", r"1936\s*20", r"personkonto.*1936", r"1936.*personkonto"],
     "Lönekonto Nordea": [r"lönekonto.*nordea", r"nordea.*lön", r"920117"],
     "Lönekonto Swedbank": [r"lönekonto.*swed", r"swedbank.*lön", r"9735695422", r"transaktioner"],
     "Linneas CSN": [r"linnea.*csn", r"sparkonto.*3100", r"3100\s*22"],
-    "Linneas Lönekonto": [r"linneas\s*löne", r"linnea.*lönekonto", r"1127"],
+    "Patriks Lönekonto": [r"patriks?\s*löne", r"patrik.*lönekonto", r"1127\s*21\s*36671", r"\b1127\b"],
     "Linneas Sparkonto": [r"linnea.*spar", r"linneas\s*spark", r"3055"],
     "Patriks Sparkonto": [r"patrik.*spar", r"patriks\s*spar"],
     "Räkningar Swedbank": [r"räkning", r"rakning", r"swedbank.*räk", r"faktura"],
@@ -69,8 +87,6 @@ def _score_text(text: str, account: str, hints: List[str]) -> Tuple[float, List[
 def _match_account_numbers(text: str, accounts: List[str]) -> Optional[tuple[str, float, List[str]]]:
     norm = text
     for pattern, account in ACCOUNT_NUMBER_MAP:
-        if account not in accounts:
-            continue
         if re.search(pattern, norm, re.IGNORECASE):
             return account, 0.85, [f"kontonummer: {pattern}"]
     return None
