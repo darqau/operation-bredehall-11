@@ -5,11 +5,25 @@
 
 set -e
 
-CONFIG_PATH="/config/options.json"
 PORT=8765
-if [ -f "$CONFIG_PATH" ]; then
-  PORT=$(grep -o '"port":[^,}]*' "$CONFIG_PATH" 2>/dev/null | head -1 | sed 's/"port"://;s/"//g;s/ //g')
-  APP_KEY=$(grep -o '"app_api_key":[^,}]*' "$CONFIG_PATH" 2>/dev/null | head -1 | sed 's/"app_api_key"://;s/"//g;s/ //g')
+if [ -f /data/options.json ] || [ -f /config/options.json ]; then
+  read PORT APP_KEY <<EOF
+$(python3 <<'PY'
+import json
+from pathlib import Path
+for p in ("/data/options.json", "/config/options.json"):
+    fp = Path(p)
+    if fp.is_file():
+        o = json.loads(fp.read_text(encoding="utf-8"))
+        print(o.get("port") or 8765)
+        print((o.get("app_api_key") or "").strip())
+        break
+else:
+    print(8765)
+    print("")
+PY
+)
+EOF
   if [ -n "$APP_KEY" ]; then
     export APP_API_KEY="$APP_KEY"
   fi

@@ -329,7 +329,28 @@ tr:last-child td { border-bottom: none; }
 .chart-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
 .chart-head .section-title { margin-bottom: 0.75rem; }
 .chart-reset { padding: 0.2rem 0.55rem; font-size: 0.9rem; line-height: 1; }
+.docs-callout {
+  border: 1px solid rgba(124, 108, 255, 0.35);
+  background: rgba(124, 108, 255, 0.08);
+  margin-bottom: 1rem;
+}
+.docs-callout .section-title { margin-top: 0; }
+.docs-callout p,
+.docs-callout li {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+.docs-callout strong { color: var(--text); }
+.docs-callout ol,
+.docs-callout ul {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.25rem;
+}
+.docs-callout li { margin-bottom: 0.35rem; }
+
 .chart-hint { font-size: 0.78rem; color: var(--text-muted); margin: 0.25rem 0 0; }
+
 .chart-exclude-note { font-size: 0.72rem; color: var(--text-muted); margin: 0.15rem 0 0.35rem; font-style: italic; }
 .drop-zone-accounts { font-size: 0.75rem; color: var(--text-muted); margin: 0.85rem 0 0; line-height: 1.6; }
 .drop-zone-accounts .acc-tag {
@@ -504,15 +525,44 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--text); }
 th.sortable.sorted-asc::after { content: ' ↑'; }
 th.sortable.sorted-desc::after { content: ' ↓'; }
-th.cat-amount-col { text-align: right; white-space: nowrap; }
-th.cat-amount-col.sortable.sorted-asc::after,
-th.cat-amount-col.sortable.sorted-desc::after { content: none; }
-th.cat-amount-col .cat-amount-label.sortable-dir::after { font-size: 0.75em; opacity: 0.7; }
-th.cat-amount-col.sorted-asc .cat-amount-label::after { content: ' ↑'; }
-th.cat-amount-col.sorted-desc .cat-amount-label::after { content: ' ↓'; }
-.cat-amount-sum { display: block; font-size: 0.72rem; font-weight: 600; line-height: 1.2; margin-bottom: 0.15rem; opacity: 0.95; }
-.cat-amount-label { display: block; font-size: inherit; font-weight: inherit; color: var(--text-muted); }
 #cat-txn-table td:last-child { text-align: right; }
+
+.cat-sum-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+.cat-sum-card[hidden] { display: none !important; }
+.cat-sum-scope {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+.cat-sum-scope strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.cat-sum-figure {
+  text-align: right;
+  flex-shrink: 0;
+}
+.cat-sum-value {
+  font-size: 1.35rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.cat-sum-meta {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.2rem;
+}
 
 .mobile-nav {
   position: fixed;

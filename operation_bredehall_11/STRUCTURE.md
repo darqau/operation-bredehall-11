@@ -14,6 +14,7 @@ operation_bredehall_11/
 │
 ├── app/
 │   ├── main.py              # FastAPI, auth middleware, startup migrationer
+│   ├── data_sync.py         # Git-data → /data i HA-containern
 │   ├── database.py          # SQLite + DATA_DIR
 │   ├── migrations.py        # Idempotenta ALTER TABLE + WAL
 │   ├── models.py            # Task, FinanceTransaction, FinanceLoan
@@ -27,16 +28,13 @@ operation_bredehall_11/
 │   ├── seed/
 │   └── static/              # SPA (index.html, app.js, vendor/)
 │
-└── data/                    # Lokalt (gitignored): bredehall.db, finance_config.json
+└── data/                    # I git: bredehall.db + finance_config.json
+                             # Lokalt gitignored: finance/ CSV-arkiv
 ```
-
-## Autentisering
-
-- **Lokal dev:** ingen `APP_API_KEY` → öppen access
-- **HA direkt port / Tailscale:** sätt `app_api_key` i add-on options
-- **HA Ingress:** `X-Ingress-Path`-header → ingen extra nyckel
 
 ## Data
 
-- `finance_config.json` i `/data` (HA) eller `operation_bredehall_11/data/` (lokalt)
-- Repot innehåller bara exempel-defaults — riktiga konton fylls i via UI
+- **`bredehall.db`** + **`finance_config.json`** committas till git (privat repo)
+- HA add-on: vid start kopieras bundlade filer till `/data` om innehållet skiljer sig
+- Lokal dev läser/skriver samma `data/`-mapp — ingen separat databas
+- Stoppa lokal server innan commit så databasen hinner stängas rent (se Inställningar i appen)

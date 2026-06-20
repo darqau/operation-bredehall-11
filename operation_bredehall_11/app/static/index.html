@@ -13,7 +13,7 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="static/css/app.css?v=26">
+  <link rel="stylesheet" href="static/css/app.css?v=28">
   <script src="static/vendor/chart.umd.min.js"></script>
   <script src="static/vendor/hammer.min.js"></script>
   <script src="static/vendor/chartjs-plugin-zoom.min.js"></script>
@@ -274,6 +274,7 @@
               <label class="checkbox-label"><input type="checkbox" id="cat-only-ovrigt"> Endast Övrigt</label>
               <input class="input" id="cat-search" placeholder="Sök beskrivning…" style="max-width:14rem">
             </div>
+            <div class="cat-sum-card" id="cat-sum-card" hidden></div>
             <div id="cat-txn-table"></div>
             <div class="toolbar" id="cat-pagination" style="margin-top:0.5rem"></div>
           </div>
@@ -281,6 +282,28 @@
 
         <!-- SETTINGS -->
         <section class="page" data-page="settings">
+          <div class="card docs-callout" id="settings-data-docs">
+            <h2 class="section-title">Så sparas din data</h2>
+            <p>All ekonomi och alla uppgifter ligger i <strong>en databasfil</strong> (<code>bredehall.db</code>) som följer med i git. Du behöver <strong>inte</strong> importera CSV igen när Home Assistant uppdateras.</p>
+            <p><strong>Samma data överallt</strong></p>
+            <ul>
+              <li><strong>Datorn</strong> (127.0.0.1:8890) läser filen direkt i projektmappen.</li>
+              <li><strong>Home Assistant / Tailscale</strong> (port 8765) får samma fil automatiskt vid omstart efter git-uppdatering.</li>
+            </ul>
+            <p><strong>Rutin när du ändrat något</strong></p>
+            <ol>
+              <li>Jobba som vanligt på datorn.</li>
+              <li><strong>Stoppa</strong> den lokala servern (Ctrl+C i terminalen) innan du sparar till git. Medan appen kör håller den databasen öppen — då kan git inte få med hela innehållet. Ibland skapas också tillfälliga sidofiler (<code>.db-wal</code>, <code>.db-shm</code>); de försvinner när servern stoppats och allt skrivits in i huvudfilen.</li>
+              <li>Commit och push till GitHub (filerna <code>data/bredehall.db</code> och <code>data/finance_config.json</code> ska följa med).</li>
+              <li>I Home Assistant: uppdatera add-on → <strong>Återuppbygg</strong> → <strong>Starta om</strong>.</li>
+            </ol>
+            <p><strong>Tänk på</strong></p>
+            <ul>
+              <li>Ändringar du bara gör via mobil/Tailscale hamnar <em>inte</em> automatiskt i git — gör ekonomiändringar på datorn om du vill att de ska följa med till nästa uppdatering.</li>
+              <li>Databasen innehåller riktiga transaktioner — repot ska vara <strong>privat</strong>.</li>
+              <li>API-nyckeln under nedan sparas i webbläsaren och behövs för Tailscale (samma värde som <code>app_api_key</code> i add-on-konfigurationen).</li>
+            </ul>
+          </div>
           <div class="card">
             <h2 class="section-title">Datalagring</h2>
             <p id="settings-info" style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem"></p>
@@ -387,6 +410,6 @@
     </div>
   </aside>
 
-  <script src="static/js/app.js?v=26"></script>
+  <script src="static/js/app.js?v=28"></script>
 </body>
 </html>

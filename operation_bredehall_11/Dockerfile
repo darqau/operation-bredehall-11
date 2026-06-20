@@ -26,6 +26,9 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Appkod
 COPY app/ ./app/
 COPY run.sh .
+# Git-tracked canonical data (single source of truth for HA)
+RUN mkdir -p ./data
+COPY data/bredehall.db data/finance_config.json ./data/
 
 # Home Assistant mountar /data för persistent lagring; annars använd /share eller /data
 ENV DATA_DIR=/data

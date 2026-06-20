@@ -26,7 +26,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 ## Säkerhet
 
 - Sätt **`app_api_key`** i add-on options vid exponering via Tailscale eller öppen port.
-- Webbläsaren sparar nyckeln i `sessionStorage` (fält under Inställningar).
+- Webbläsaren sparar nyckeln i `localStorage` (fält under Inställningar).
 - Add-on körs på **port 8765** — ingen Ingress-proxyn.
 - Mass-radering av transaktioner (`DELETE /api/finance/transactions`) är borttagen; dev-wipe kräver `ALLOW_WIPE=1`.
 
@@ -36,11 +36,31 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 - Ekonomi: CSV-import, kategorisering (regler + valfri lokal AI), grafer, bolån/skulder
 - Kategorisida med inline-redigering
 
+## Data — en databas, samma överallt
+
+All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. Filen ligger i git tillsammans med **`data/finance_config.json`**. Det är den enda källan — du behöver inte importera CSV igen när Home Assistant uppdateras.
+
+| Var du öppnar appen | Vad som händer |
+|---------------------|----------------|
+| **Datorn** (`127.0.0.1:8890`) | Läser `data/bredehall.db` direkt |
+| **Home Assistant / Tailscale** (`:8765`) | Får samma fil från git vid omstart (automatisk kopiering om innehållet skiljer sig) |
+
+### Rutin efter ändringar
+
+1. Gör ändringar lokalt på datorn.
+2. **Stoppa** den lokala servern (Ctrl+C) innan du sparar till git. Medan appen kör håller den databasen öppen — då riskerar git att missa det senaste. Tillfälliga sidofiler (`.db-wal`, `.db-shm`) försvinner när servern stoppats och allt skrivits in i huvudfilen.
+3. Commit och push (`data/bredehall.db` + `data/finance_config.json`).
+4. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
+
+**OBS:** Ändringar du bara gör via mobil/Tailscale följer inte med till git automatiskt. Gör ekonomiändringar på datorn om de ska sparas i repot.
+
+CSV-arkivet (`data/finance/`) stannar på datorn (gitignored) — transaktionerna finns redan i databasen.
+
+Repot innehåller riktig ekonomidata — håll det **privat** på GitHub.
+
 ## Konfiguration
 
-- **`data/finance_config.json`** — konton, Drive-ID, AI-inställningar (persisteras mellan omstarter)
-- **`finance_storage_mode`** i HA-options synkas vid första start
-- Fyll i kontonummer och mappar via **Inställningar** — inga personuppgifter i repots defaults
+- **`data/finance_config.json`** — konton, mappar, AI (följer med i git)
 
 ## Tester
 

@@ -1,4 +1,11 @@
 __pycache__/
 *.pyc
-data/
 pip_install_log.txt
+
+# Canonical data lives in git (bredehall.db + finance_config.json).
+# CSV-arkiv och credentials stannar lokalt.
+data/finance/
+data/gdrive_credentials.json
+data/*.log
+data/bredehall.db-wal
+data/bredehall.db-shm

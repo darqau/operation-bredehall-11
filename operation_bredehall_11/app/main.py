@@ -67,7 +67,12 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Vid start: skapa tabeller, seed om tom, märk interna överföringar."""
+    """Vid start: synka git-data, skapa tabeller, seed om tom, märk interna överföringar."""
+    from app.data_sync import sync_bundled_data
+
+    synced = sync_bundled_data()
+    if synced:
+        logger.info("Git data synced on startup: %s", ", ".join(synced))
     init_db()
     run_migrations(engine)
     seed_if_empty()
@@ -130,7 +135,11 @@ def root():
     """Dashboard om index.html finns, annars Hello World."""
     index_file = STATIC_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file, media_type="text/html")
+        return FileResponse(
+            index_file,
+            media_type="text/html",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
     return PlainTextResponse("Hello from Operation Bredehall 11 – underhållsplaneraren kör!")
 
 

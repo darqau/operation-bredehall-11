@@ -212,19 +212,31 @@ function chartAccountLabel(item) {
 }
 
 function getApiKey() {
-  return sessionStorage.getItem('bredehall_api_key') || '';
+  return localStorage.getItem('bredehall_api_key') || sessionStorage.getItem('bredehall_api_key') || '';
 }
 
 function setApiKey(key) {
-  if (key) sessionStorage.setItem('bredehall_api_key', key);
-  else sessionStorage.removeItem('bredehall_api_key');
+  if (key) {
+    localStorage.setItem('bredehall_api_key', key);
+    sessionStorage.setItem('bredehall_api_key', key);
+  } else {
+    localStorage.removeItem('bredehall_api_key');
+    sessionStorage.removeItem('bredehall_api_key');
+  }
 }
+
+(function migrateApiKeyStorage() {
+  const legacy = sessionStorage.getItem('bredehall_api_key');
+  if (legacy && !localStorage.getItem('bredehall_api_key')) {
+    localStorage.setItem('bredehall_api_key', legacy);
+  }
+})();
 
 async function ensureApiKey() {
   const status = await fetch(relUrl('api/auth/status')).then(r => r.json()).catch(() => ({ auth_required: false }));
   if (!status.auth_required) return true;
   if (getApiKey()) return true;
-  const key = prompt('API-nyckel krävs (sätt app_api_key i Home Assistant eller APP_API_KEY lokalt):');
+  const key = prompt('API-nyckel krävs (samma som app_api_key i Home Assistant add-on):\n\nAnge nyckeln — den sparas i webbläsaren.');
   if (!key) return false;
   setApiKey(key.trim());
   return true;
@@ -245,12 +257,16 @@ function showToast(msg, isError = false) {
   el._timer = setTimeout(() => el.classList.add('hidden'), 5000);
 }
 
-async function api(path, opts = {}) {
+async function apiFetch(path, opts = {}) {
   if (!(await ensureApiKey())) throw new Error('API-nyckel saknas');
   const headers = { ...(opts.headers || {}) };
   const key = getApiKey();
   if (key) headers['X-API-Key'] = key;
-  const r = await fetch(relUrl(API + path), { cache: 'no-store', ...opts, headers });
+  return fetch(relUrl(path.startsWith('/') ? path.slice(1) : path), { cache: 'no-store', ...opts, headers });
+}
+
+async function api(path, opts = {}) {
+  const r = await apiFetch(API + path, opts);
   if (r.status === 401) {
     setApiKey('');
     if (await ensureApiKey()) return api(path, opts);
@@ -991,7 +1007,7 @@ function openLoanImportModal() {
       if (file) {
         const fd = new FormData();
         fd.append('file', file);
-        const r = await fetch(relUrl('api/finance/loans/parse-image'), { method: 'POST', body: fd });
+        const r = await apiFetch('api/finance/loans/parse-image', { method: 'POST', body: fd });
         if (!r.ok) throw new Error(await r.text() || r.statusText);
         result = await r.json();
       } else if (text) {
@@ -1886,7 +1902,7 @@ async function handleDroppedFiles(fileList, forcedAccount = null) {
 async function detectFile(file) {
   const fd = new FormData();
   fd.append('file', file);
-  const r = await fetch(relUrl('api/finance/detect'), { method: 'POST', body: fd });
+  const r = await apiFetch('api/finance/detect', { method: 'POST', body: fd });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -1896,7 +1912,7 @@ async function uploadFileToAccount(file, account, autoProcess = true) {
   fd.append('file', file);
   fd.append('account', account);
   fd.append('auto_process', autoProcess ? 'true' : 'false');
-  const r = await fetch(relUrl('api/finance/upload'), { method: 'POST', body: fd });
+  const r = await apiFetch('api/finance/upload', { method: 'POST', body: fd });
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
     throw new Error(err.detail?.message || JSON.stringify(err.detail) || r.statusText);
@@ -2033,7 +2049,7 @@ async function loadSettings() {
     const appKeyEl = $('#cfg-app-api-key');
     if (appKeyEl) {
       appKeyEl.value = getApiKey();
-      appKeyEl.placeholder = 'Lagras i webbläsaren (sessionStorage)';
+      appKeyEl.placeholder = 'Samma som app_api_key i Home Assistant (sparas i webbläsaren)';
     }
     updateAiUiState();
     const mapEl = $('#folder-map-editor');
@@ -2139,6 +2155,50 @@ function catDateRange() {
     };
   }
   return { year: v.year };
+}
+
+const CAT_MONTH_NAMES = ['januari', 'februari', 'mars', 'april', 'maj', 'juni', 'juli', 'augusti', 'september', 'oktober', 'november', 'december'];
+
+function categoryScopeLabel() {
+  const v = state.categoryView;
+  const period = v.range === 'month'
+    ? `${CAT_MONTH_NAMES[v.month - 1]} ${v.year}`
+    : `Hela ${v.year}`;
+  const filters = [];
+  if (v.onlyOvrigt) filters.push('Övrigt');
+  else if (v.category) filters.push(v.category);
+  if (v.search) filters.push(`sök: «${v.search}»`);
+  if (!filters.length) filters.push('alla kategorier');
+  return { period, filters: filters.join(' · ') };
+}
+
+function renderCategorySumCard(total, sumAmount) {
+  const card = $('#cat-sum-card');
+  if (!card) return;
+  if (!total) {
+    card.hidden = true;
+    card.innerHTML = '';
+    return;
+  }
+  const { period, filters } = categoryScopeLabel();
+  const hex = vCategoryHex();
+  const sumClass = sumAmount >= 0 ? 'amount-pos' : 'amount-neg';
+  card.hidden = false;
+  card.innerHTML = `
+    <div class="cat-sum-scope">
+      <div>Summa för <strong>${escapeHtml(period)}</strong></div>
+      <div>${escapeHtml(filters)}</div>
+    </div>
+    <div class="cat-sum-figure">
+      <div class="cat-sum-value ${sumClass}" style="${hex ? `color:${hex}` : ''}">${formatMoney(sumAmount)}</div>
+      <div class="cat-sum-meta">${total} transaktion${total === 1 ? '' : 'er'}</div>
+    </div>`;
+}
+
+function vCategoryHex() {
+  const v = state.categoryView;
+  const cat = v.onlyOvrigt ? 'Övrigt' : (v.category || '');
+  return cat ? financeCategoryHex(cat) : '';
 }
 
 function initCategoryControls() {
@@ -2265,10 +2325,11 @@ async function loadCategoryTransactions() {
   if (v.search) params.set('search', v.search);
 
   const data = await api('/api/finance/transactions?' + params);
-  renderCategoryTxnTable(data.items || [], data.total || 0, data.sum_amount ?? 0);
+  renderCategorySumCard(data.total || 0, data.sum_amount ?? 0);
+  renderCategoryTxnTable(data.items || [], data.total || 0);
 }
 
-function renderCategoryTxnTable(rows, total, sumAmount = 0) {
+function renderCategoryTxnTable(rows, total) {
   const wrap = $('#cat-txn-table');
   if (!wrap) return;
   const v = state.categoryView;
@@ -2278,17 +2339,13 @@ function renderCategoryTxnTable(rows, total, sumAmount = 0) {
     return;
   }
   const sortClass = (col) => `sortable ${v.sortBy === col ? 'sorted-' + v.sortDir : ''}`;
-  const sumClass = sumAmount >= 0 ? 'amount-pos' : 'amount-neg';
   wrap.innerHTML = `<div class="table-wrap"><table>
     <thead><tr>
       <th class="${sortClass('txn_date')}" data-sort="txn_date">Datum</th>
       <th class="${sortClass('description')}" data-sort="description">Beskrivning</th>
       <th class="${sortClass('account')}" data-sort="account">Konto</th>
       <th class="${sortClass('category')}" data-sort="category">Kategori</th>
-      <th class="${sortClass('amount')} cat-amount-col" data-sort="amount">
-        <span class="cat-amount-sum ${sumClass}" title="Summa (${total} transaktioner)">${formatMoney(sumAmount)}</span>
-        <span class="cat-amount-label">Belopp</span>
-      </th>
+      <th class="${sortClass('amount')}" data-sort="amount">Belopp</th>
     </tr></thead>
     <tbody>${rows.map(t => `<tr data-txn-id="${t.id}">
       <td>${formatDate(t.txn_date)}</td>
@@ -2378,4 +2435,15 @@ async function loadCategoriesPage(skipStats = false) {
 
 // ── Init ─────────────────────────────────────────────────────────────
 bindTaskFilters();
-setPage('home');
+
+async function initApp() {
+  try {
+    const status = await fetch(relUrl('api/auth/status')).then(r => r.json());
+    if (status.auth_required && !getApiKey()) {
+      showToast('API-nyckel krävs — öppna Inställningar och klistra in samma nyckel som i add-on-konfigurationen.', true);
+    }
+  } catch (_) { /* offline or no auth */ }
+  setPage('home');
+}
+
+initApp();
