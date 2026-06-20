@@ -1,6 +1,83 @@
 const API = '';
+
+/** Relative URL for HA Ingress (base href) and direct port access. */
+function relUrl(path) {
+  return path.startsWith('/') ? path.slice(1) : path;
+}
 const CATEGORIES = ['VVS','Trädgård','Ekonomi','Administration','Hus','El','Värme','Annat'];
 const FREQUENCIES = ['En gång','Månatlig','Kvartalsvis','Varannan termin','Årlig','Vart 2:a år','Vart 3:e år','Vart 5:e år','Vid behov'];
+
+// Harmonized finance category colors (sync with categorizer.py CATEGORIES)
+const FINANCE_CATEGORY_COLORS = {
+  'Lön': '#34d399',
+  'Bidrag': '#2dd4bf',
+  'Ränta/Avkastning': '#10b981',
+  'Inkomst (Swish)': '#4ade80',
+  'Övrig inkomst': '#6ee7b7',
+  'Livsmedel': '#fb923c',
+  'Restaurang & Uteät': '#f97316',
+  'Systembolaget': '#be123c',
+  'Boende & Drift': '#60a5fa',
+  'Boende (el)': '#facc15',
+  'Hushållstjänster': '#38bdf8',
+  'Försäkring': '#818cf8',
+  'Skönhet & Tjänster': '#f472b6',
+  'Hälsa & Sjukvård': '#fb7185',
+  'Träning': '#a78bfa',
+  'Shopping & Kläder': '#e879f9',
+  'Hem & Fritid': '#22d3ee',
+  'Husdjur': '#d4a574',
+  'Streaming & Media': '#c084fc',
+  'Resor & Semester': '#06b6d4',
+  'Kollektivtrafik & Taxi': '#a3e635',
+  'Bil & Transport': '#fbbf24',
+  'Mobil & Bredband': '#3b82f6',
+  'Bankavgifter': '#94a3b8',
+  'Sparande': '#eab308',
+  'Barn': '#fda4af',
+  'Donationer': '#c4b5fd',
+  'Swish (privat)': '#5eead4',
+  'CSN (Återbetalning)': '#f87171',
+  'Bostadsköp (engång)': '#2563eb',
+  'Överföring': '#64748b',
+  'Övrigt': '#9ca3af',
+};
+const FINANCE_CATEGORY_FALLBACK = '#94a3b8';
+
+function financeCategoryHex(name) {
+  return FINANCE_CATEGORY_COLORS[name] || FINANCE_CATEGORY_FALLBACK;
+}
+
+function hexToRgba(hex, alpha) {
+  const h = (hex || '').replace('#', '');
+  if (h.length < 6) return `rgba(148,163,184,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function financeCategoryBadge(category) {
+  const hex = financeCategoryHex(category);
+  return `<span class="badge badge-finance-cat" style="background:${hexToRgba(hex, 0.18)};color:${hex};border:1px solid ${hexToRgba(hex, 0.4)}">${escapeHtml(category)}</span>`;
+}
+
+function financeCategoryChartColors(categories) {
+  return (categories || []).map(c => {
+    const name = typeof c === 'string' ? c : c.category;
+    return financeCategoryHex(name);
+  });
+}
+
+function accountTimelineGradient(chart) {
+  const { ctx, chartArea } = chart;
+  if (!chartArea) return 'rgba(124,108,255,0.55)';
+  const g = ctx.createLinearGradient(chartArea.left, 0, chartArea.right, 0);
+  g.addColorStop(0, 'rgba(72, 62, 140, 0.35)');
+  g.addColorStop(0.4, 'rgba(124, 108, 255, 0.65)');
+  g.addColorStop(1, 'rgba(34, 211, 238, 0.92)');
+  return g;
+}
 
 let state = {
   page: 'home',
@@ -36,6 +113,8 @@ let state = {
     category: '',
     onlyOvrigt: false,
     search: '',
+    sortBy: 'txn_date',
+    sortDir: 'desc',
     offset: 0,
     limit: 40,
   },
@@ -142,7 +221,7 @@ function setApiKey(key) {
 }
 
 async function ensureApiKey() {
-  const status = await fetch(API + '/api/auth/status').then(r => r.json()).catch(() => ({ auth_required: false }));
+  const status = await fetch(relUrl('api/auth/status')).then(r => r.json()).catch(() => ({ auth_required: false }));
   if (!status.auth_required) return true;
   if (getApiKey()) return true;
   const key = prompt('API-nyckel krävs (sätt app_api_key i Home Assistant eller APP_API_KEY lokalt):');
@@ -171,7 +250,7 @@ async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   const key = getApiKey();
   if (key) headers['X-API-Key'] = key;
-  const r = await fetch(API + path, { cache: 'no-store', ...opts, headers });
+  const r = await fetch(relUrl(API + path), { cache: 'no-store', ...opts, headers });
   if (r.status === 401) {
     setApiKey('');
     if (await ensureApiKey()) return api(path, opts);
@@ -572,7 +651,12 @@ function readFinanceFiltersFromUI() {
   state.financeFilters.dateFrom = $('#fin-filter-from')?.value || '';
   state.financeFilters.dateTo = $('#fin-filter-to')?.value || '';
   state.financeFilters.search = $('#fin-filter-search')?.value?.trim() || '';
-  state.financeFilters.excludeOverforing = $('#fin-filter-no-transfer')?.checked ?? true;
+  if (state.financeFilters.category === 'Överföring') {
+    state.financeFilters.excludeOverforing = false;
+    if ($('#fin-filter-no-transfer')) $('#fin-filter-no-transfer').checked = false;
+  } else {
+    state.financeFilters.excludeOverforing = $('#fin-filter-no-transfer')?.checked ?? true;
+  }
   state.financeFilters.maxAmount = $('#fin-filter-cap')?.checked ? 100000 : 0;
   state.financeFilters.offset = 0;
 }
@@ -593,7 +677,7 @@ function populateFinanceFilterDropdowns(meta) {
       `<option value="${escapeHtml(a.name)}" ${a.name === keep ? 'selected' : ''}>${escapeHtml(formatAccountText(a.name, a.account_number))}</option>`
     ).join('');
   }
-  fill($('#fin-filter-category'), meta.categories || [], state.financeFilters.category);
+  fill($('#fin-filter-category'), sortCategoryList(meta.categories || []), state.financeFilters.category);
   fill($('#fin-filter-typ'), meta.typs || [], state.financeFilters.typ);
   const yearSel = $('#fin-filter-year');
   if (yearSel) {
@@ -759,12 +843,15 @@ function renderHeroExpenses() {
     return;
   }
   const max = Math.max(...items.map(i => i.amount), 1);
-  list.innerHTML = items.map(i => `
-    <li>
+  list.innerHTML = items.map((i, idx) => {
+    const hex = financeCategoryHex(i.category);
+    return `<li>
+      <span class="hero-exp-rank" style="background:${hexToRgba(hex, 0.22)};color:${hex}">${idx + 1}</span>
       <span class="hero-exp-name">${escapeHtml(i.category)}</span>
-      <span class="hero-exp-bar"><span style="width:${Math.round((i.amount / max) * 100)}%"></span></span>
-      <span class="hero-exp-amount">${formatMoney(i.amount)}</span>
-    </li>`).join('');
+      <span class="hero-exp-bar"><span style="width:${Math.round((i.amount / max) * 100)}%;background:${hex}"></span></span>
+      <span class="hero-exp-amount" style="color:${hex}">${formatMoney(i.amount)}</span>
+    </li>`;
+  }).join('');
 }
 
 $('#hero-exp-month')?.addEventListener('click', () => { state.heroExpRange = 'month'; renderHeroExpenses(); });
@@ -904,7 +991,7 @@ function openLoanImportModal() {
       if (file) {
         const fd = new FormData();
         fd.append('file', file);
-        const r = await fetch(API + '/api/finance/loans/parse-image', { method: 'POST', body: fd });
+        const r = await fetch(relUrl('api/finance/loans/parse-image'), { method: 'POST', body: fd });
         if (!r.ok) throw new Error(await r.text() || r.statusText);
         result = await r.json();
       } else if (text) {
@@ -988,6 +1075,7 @@ function renderFinanceCharts(d) {
     const expenseData = months.map(m => Math.abs((d.monthly_expenses || []).find(x => x.month === m)?.amount || 0));
     const ieOpts = chartOptions(chartDataMax(incomeData, expenseData));
     ieOpts.plugins = { ...ieOpts.plugins, legend: { display: true, labels: { color: '#8b93a8' } } };
+    ieOpts.onClick = chartPickLabel(applyFinanceMonthFromChart);
     state.charts.incomeExpense = new Chart(ieCtx, {
       type: 'bar',
       data: {
@@ -999,29 +1087,33 @@ function renderFinanceCharts(d) {
       },
       options: ieOpts,
     });
+    state.charts.incomeExpense.options.onHover = chartPointerHover(state.charts.incomeExpense);
   }
 
   const catCtx = $('#chart-categories');
   if (catCtx && (d.expenses_by_category || []).length) {
     const cats = d.expenses_by_category.slice(0, 10);
+    const catChartOpts = {
+      responsive: true,
+      maintainAspectRatio: false,
+      onClick: chartPickLabel(applyFinanceCategoryFromChart),
+      plugins: {
+        legend: { position: 'right', labels: { color: '#8b93a8', boxWidth: 12, font: { size: 11 } } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${formatMoney(ctx.parsed)}` } },
+      },
+    };
     state.charts.categories = new Chart(catCtx, {
       type: 'doughnut',
       data: {
         labels: cats.map(c => c.category),
         datasets: [{
           data: cats.map(c => Math.abs(c.amount)),
-          backgroundColor: ['#7c6cff','#22d3ee','#f472b6','#34d399','#fbbf24','#fb923c','#a78bfa','#60a5fa','#f87171','#94a3b8'],
+          backgroundColor: financeCategoryChartColors(cats.map(c => c.category)),
         }],
       },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'right', labels: { color: '#8b93a8', boxWidth: 12, font: { size: 11 } } },
-          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${formatMoney(ctx.parsed)}` } },
-        },
-      },
+      options: catChartOpts,
     });
+    state.charts.categories.options.onHover = chartPointerHover(state.charts.categories);
   } else if (catCtx) {
     catCtx.getContext('2d').clearRect(0, 0, catCtx.width, catCtx.height);
   }
@@ -1029,6 +1121,8 @@ function renderFinanceCharts(d) {
   const expCtx = $('#chart-expenses');
   if (expCtx) {
     const expData = (d.monthly_expenses || []).map(x => Math.abs(x.amount));
+    const expOpts = chartOptions(chartDataMax(expData));
+    expOpts.onClick = chartPickLabel(applyFinanceMonthFromChart);
     state.charts.expenses = new Chart(expCtx, {
       type: 'bar',
       data: {
@@ -1040,8 +1134,9 @@ function renderFinanceCharts(d) {
           borderRadius: 6,
         }],
       },
-      options: chartOptions(chartDataMax(expData)),
+      options: expOpts,
     });
+    state.charts.expenses.options.onHover = chartPointerHover(state.charts.expenses);
   }
 
   renderBalanceChart(d);
@@ -1056,20 +1151,13 @@ function renderFinanceCharts(d) {
   });
 }
 
-const ACCOUNT_COLORS = ['#7c6cff', '#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#60a5fa', '#a78bfa', '#fb923c', '#f87171', '#94a3b8'];
-
-function tsToYearMonth(ts) {
-  const dt = new Date(ts);
-  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
-}
-
-// Inline plugin: draw a rounded "saldo" chip at the end of each horizontal bar.
 const balanceChipPlugin = {
   id: 'balanceChips',
   afterDatasetsDraw(chart) {
     const { ctx } = chart;
     const meta = chart.getDatasetMeta(0);
     const chips = chart.$balanceChips || [];
+    const endLabels = chart.$timelineEndLabels || [];
     if (!meta || !meta.data) return;
     ctx.save();
     ctx.font = '600 11px "DM Sans", system-ui, sans-serif';
@@ -1079,9 +1167,8 @@ const balanceChipPlugin = {
       const textW = ctx.measureText(label).width;
       const padX = 7, h = 18;
       const w = textW + padX * 2;
-      let x = bar.x + 8;            // just past the bar's end
+      let x = bar.x + 8;
       const y = bar.y - h / 2;
-      // keep chip inside the canvas
       if (x + w > chart.chartArea.right) x = Math.max(chart.chartArea.left, bar.x - w - 8);
       const r = 9;
       ctx.beginPath();
@@ -1094,15 +1181,42 @@ const balanceChipPlugin = {
       ctx.fillStyle = 'rgba(15,17,23,0.92)';
       ctx.fill();
       ctx.lineWidth = 1;
-      ctx.strokeStyle = bar.options?.backgroundColor || 'rgba(124,108,255,0.8)';
+      ctx.strokeStyle = 'rgba(34, 211, 238, 0.55)';
       ctx.stroke();
       ctx.fillStyle = '#f0f2f8';
       ctx.textBaseline = 'middle';
       ctx.fillText(label, x + padX, y + h / 2 + 0.5);
+
+      const endLabel = endLabels[i];
+      if (endLabel) {
+        ctx.font = '500 10px "DM Sans", system-ui, sans-serif';
+        ctx.fillStyle = '#8b93a8';
+        ctx.textAlign = 'center';
+        ctx.fillText(endLabel, bar.x, bar.y + bar.height / 2 + 14);
+        ctx.textAlign = 'left';
+        ctx.font = '600 11px "DM Sans", system-ui, sans-serif';
+      }
     });
     ctx.restore();
   },
 };
+
+function tsToYearMonth(ts) {
+  const dt = new Date(ts);
+  return dt.toLocaleDateString('sv-SE', { year: 'numeric', month: 'short' });
+}
+
+function timelineLogTs(ts) {
+  // Compress early years, expand recent months on the axis.
+  const DAY = 86400000;
+  const epoch = new Date('2000-01-01T12:00:00').getTime();
+  return Math.log(Math.max(ts - epoch, DAY));
+}
+
+function timelineLogToTs(logVal) {
+  const epoch = new Date('2000-01-01T12:00:00').getTime();
+  return epoch + Math.exp(logVal);
+}
 
 function renderBalanceChart(d) {
   const ctx = $('#chart-timeline');
@@ -1113,25 +1227,18 @@ function renderBalanceChart(d) {
     ctx.getContext('2d').clearRect(0, 0, ctx.width, ctx.height);
     return;
   }
-  // Sort by first activity so the timeline reads top→bottom chronologically.
-  items.sort((a, b) => a.first_date.localeCompare(b.first_date));
+  items.sort((a, b) => a.last_date.localeCompare(b.last_date));
 
   const DAY = 86400000;
-  const starts = items.map(a => new Date(a.first_date + 'T12:00:00').getTime());
   const ends = items.map(a => new Date(a.last_date + 'T12:00:00').getTime());
-  const dataMin = Math.min(...starts);
   const dataMax = Math.max(...ends);
-  const span = Math.max(dataMax - dataMin, DAY * 30);
-  // Explicit bounds so the bar value-axis does NOT snap to 0 (the old 1970 bug).
-  const xMin = dataMin - span * 0.02;
-  const xMax = dataMax + span * 0.18; // headroom for the saldo chips
+  const dataMin = Math.min(...items.map(a => new Date(a.first_date + 'T12:00:00').getTime()));
+  // All bars start at the same left anchor (earliest known data) — missing history is implied.
+  const anchorTs = dataMin;
+  const xMin = timelineLogTs(anchorTs);
+  const xMax = timelineLogTs(dataMax) + 0.08;
 
-  const colors = items.map((_, i) => ACCOUNT_COLORS[i % ACCOUNT_COLORS.length]);
-  const bars = items.map((a, i) => {
-    let s = starts[i], e = ends[i];
-    if (e - s < DAY * 14) e = s + DAY * 14; // keep very short spans visible
-    return [s, e];
-  });
+  const bars = items.map(a => [timelineLogTs(anchorTs), timelineLogTs(new Date(a.last_date + 'T12:00:00').getTime())]);
 
   const chart = new Chart(ctx, {
     type: 'bar',
@@ -1139,8 +1246,8 @@ function renderBalanceChart(d) {
       labels: items.map(a => chartAccountLabel(a)),
       datasets: [{
         data: bars,
-        backgroundColor: colors.map(c => c + 'cc'),
-        borderColor: colors,
+        backgroundColor(c) { return accountTimelineGradient(c.chart); },
+        borderColor: 'rgba(34, 211, 238, 0.45)',
         borderWidth: 1,
         borderRadius: 6,
         borderSkipped: false,
@@ -1151,7 +1258,7 @@ function renderBalanceChart(d) {
       indexAxis: 'y',
       responsive: true,
       maintainAspectRatio: false,
-      layout: { padding: { right: 12 } },
+      layout: { padding: { right: 12, bottom: 4 } },
       plugins: {
         legend: { display: false },
         tooltip: {
@@ -1160,7 +1267,8 @@ function renderBalanceChart(d) {
             label: (c) => {
               const a = items[c.dataIndex];
               return [
-                `Period: ${formatDate(a.first_date)} → ${formatDate(a.last_date)}`,
+                `Senaste transaktion: ${formatDate(a.last_date)}`,
+                `Första kända: ${formatDate(a.first_date)}`,
                 `Saldo: ${formatMoney(a.balance)}`,
               ];
             },
@@ -1172,7 +1280,17 @@ function renderBalanceChart(d) {
           type: 'linear',
           min: xMin,
           max: xMax,
-          ticks: { color: '#8b93a8', callback: (v) => tsToYearMonth(v), maxRotation: 45, autoSkip: true, maxTicksLimit: 9 },
+          ticks: {
+            color: '#8b93a8',
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: 8,
+            callback: (v) => {
+              const ts = timelineLogToTs(v);
+              if (!Number.isFinite(ts)) return '';
+              return tsToYearMonth(ts);
+            },
+          },
           grid: { color: 'rgba(255,255,255,0.05)' },
         },
         y: { ticks: { color: '#8b93a8', font: { size: 11 } }, grid: { display: false } },
@@ -1181,6 +1299,10 @@ function renderBalanceChart(d) {
     plugins: [balanceChipPlugin],
   });
   chart.$balanceChips = items.map(a => a.balance != null ? formatMoney(a.balance) : '');
+  chart.$timelineEndLabels = items.map(a => {
+    const d2 = new Date(a.last_date + 'T12:00:00');
+    return d2.toLocaleDateString('sv-SE', { month: 'short', year: 'numeric' });
+  });
   state.charts.timeline = chart;
 }
 
@@ -1223,6 +1345,65 @@ function chartOptions(dataMax = null) {
       y: yScale,
     },
   };
+}
+
+function chartPointerHover(chart) {
+  return (event, elements) => {
+    if (chart?.canvas) chart.canvas.style.cursor = elements?.length ? 'pointer' : 'default';
+  };
+}
+
+function chartPickLabel(onPick) {
+  return (event, elements, chart) => {
+    if (!elements?.length || !chart?.data?.labels) return;
+    const label = chart.data.labels[elements[0].index];
+    if (label) onPick(label);
+  };
+}
+
+function applyCategoryFilterFromChart(category) {
+  state.categoryView.category = category;
+  state.categoryView.onlyOvrigt = false;
+  state.categoryView.offset = 0;
+  const sel = $('#cat-filter-category');
+  if (sel) sel.value = category;
+  const ovrigt = $('#cat-only-ovrigt');
+  if (ovrigt) ovrigt.checked = false;
+  loadCategoryTransactions();
+}
+
+function applyFinanceCategoryFromChart(category) {
+  state.financeFilters.category = category;
+  state.financeFilters.offset = 0;
+  if (category === 'Överföring') {
+    state.financeFilters.excludeOverforing = false;
+    const noTransfer = $('#fin-filter-no-transfer');
+    if (noTransfer) noTransfer.checked = false;
+  }
+  const catSel = $('#fin-filter-category');
+  if (catSel) catSel.value = category;
+  loadFinance();
+}
+
+function applyFinanceMonthFromChart(monthLabel) {
+  const m = String(monthLabel || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return;
+  const y = +m[1];
+  const mo = +m[2];
+  const last = new Date(y, mo, 0).getDate();
+  const from = `${m[1]}-${m[2]}-01`;
+  const to = `${m[1]}-${m[2]}-${String(last).padStart(2, '0')}`;
+  state.financeFilters.year = String(y);
+  state.financeFilters.dateFrom = from;
+  state.financeFilters.dateTo = to;
+  state.financeFilters.offset = 0;
+  const yearSel = $('#fin-filter-year');
+  if (yearSel) yearSel.value = String(y);
+  const fromEl = $('#fin-filter-from');
+  if (fromEl) fromEl.value = from;
+  const toEl = $('#fin-filter-to');
+  if (toEl) toEl.value = to;
+  loadFinance();
 }
 
 function chartDataMax(...datasets) {
@@ -1269,7 +1450,7 @@ function renderTransactionTable(rows, total) {
       <td>${formatDate(t.txn_date)}</td>
       <td>${escapeHtml(t.description)}</td>
       <td>${formatAccountInlineHtml(t.account, t.account_number)}</td>
-      <td><span class="badge">${escapeHtml(t.category)}</span></td>
+      <td>${financeCategoryBadge(t.category)}</td>
       <td class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${formatMoney(t.amount)}</td>
     </tr>`).join('')}</tbody></table></div>`;
 
@@ -1307,6 +1488,7 @@ async function recategorize(method) {
         + (data.errors?.length ? '\n' + data.errors.join('\n') : '');
     } else {
       el.textContent = `↻ Klart: ${data.changed} poster omkategoriserade enligt regler.`
+        + (data.el_retagged ? ` (${data.el_retagged} el/elbolag → Boende (el)).` : '')
         + (data.internal_transfers ? ` ${data.internal_transfers} interna överföringar identifierade.` : '');
     }
     loadFinance();
@@ -1323,16 +1505,80 @@ function formatCategoryBreakdown(byCategory) {
   return '\n\nPer kategori:\n' + lines.join('\n');
 }
 
-async function ensureFinanceCategories() {
-  if (state.financeCategories.length) return state.financeCategories;
-  const data = await api('/api/finance/categories');
-  state.financeCategories = data.categories || [];
+function sortCategoryList(cats) {
+  return [...(cats || [])].sort((a, b) => a.localeCompare(b, 'sv', { sensitivity: 'base' }));
+}
+
+async function ensureFinanceCategories(force = false) {
+  if (!force && state.financeCategories.length) return state.financeCategories;
+  let fromApi = [];
+  let fromStatic = [];
+  try {
+    fromApi = (await api('/api/finance/categories')).categories || [];
+  } catch (_) { /* API may be unavailable or stale */ }
+  try {
+    const r = await fetch(relUrl('static/data/finance-categories.json?_=' + Date.now()), { cache: 'no-store' });
+    if (r.ok) fromStatic = (await r.json()).categories || [];
+  } catch (_) { /* static fallback optional */ }
+  const merged = [...new Set([...fromStatic, ...fromApi])];
+  state.financeCategories = sortCategoryList(merged.length ? merged : ['Övrigt']);
   return state.financeCategories;
 }
 
 function categoryOptions(selected = '') {
-  const cats = state.financeCategories.length ? state.financeCategories : ['Övrigt'];
+  const cats = sortCategoryList(state.financeCategories.length ? state.financeCategories : ['Övrigt']);
   return cats.map(c => `<option value="${escapeHtml(c)}"${c === selected ? ' selected' : ''}>${escapeHtml(c)}</option>`).join('');
+}
+
+function confirmSimilarCategory(description, otherCount, category) {
+  return new Promise(resolve => {
+    const finish = (value) => {
+      backdrop?.removeEventListener('click', onBackdrop);
+      $('#modal-close')?.removeEventListener('click', onCancel);
+      resolve(value);
+    };
+    const onCancel = () => { closeModal(); finish(null); };
+    const onBackdrop = (e) => { if (e.target.id === 'modal-backdrop') onCancel(); };
+    openModal(
+      `<p>Det finns <strong>${otherCount}</strong> andra transaktioner med samma beskrivning:</p>
+       <p class="similar-desc">«${escapeHtml(description)}»</p>
+       <p>Vill du sätta kategorin <strong>${escapeHtml(category)}</strong> på alla?</p>
+       <p class="similar-desc-hint" style="font-size:0.8rem;color:var(--text-muted);margin-top:0.5rem">Framtida transaktioner med samma beskrivning kategoriseras automatiskt.</p>`,
+      'Omkategorisera liknande?',
+      `<button class="btn" id="btn-cat-similar-no">Bara denna</button>
+       <button class="btn btn-primary" id="btn-cat-similar-yes">Alla ${otherCount + 1}</button>`
+    );
+    const backdrop = $('#modal-backdrop');
+    backdrop?.addEventListener('click', onBackdrop);
+    $('#modal-close')?.addEventListener('click', onCancel);
+    $('#btn-cat-similar-yes').onclick = () => { closeModal(); finish(true); };
+    $('#btn-cat-similar-no').onclick = () => { closeModal(); finish(false); };
+  });
+}
+
+async function saveTransactionCategory(txnId, category, prevCategory) {
+  let similar = { description: '', total: 1, others: 0 };
+  try {
+    similar = await api(`/api/finance/transactions/${txnId}/similar`);
+  } catch (e) {
+    // Older server builds may lack /similar — still allow single-txn update.
+    if (!String(e.message || '').startsWith('404')) throw e;
+  }
+  let applyToSimilar = false;
+  if (similar.others > 0) {
+    const choice = await confirmSimilarCategory(similar.description, similar.others, category);
+    if (choice === null) return { cancelled: true, prevCategory };
+    applyToSimilar = choice;
+  }
+  const result = await api(`/api/finance/transactions/${txnId}/category`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ category, apply_to_similar: applyToSimilar }),
+  });
+  if (result.updated_count > 1) {
+    showToast(`${result.updated_count} transaktioner uppdaterade`);
+  }
+  return { cancelled: false, result };
 }
 
 // ── AI categorization (batch + pause) ───────────────────────────────
@@ -1640,7 +1886,7 @@ async function handleDroppedFiles(fileList, forcedAccount = null) {
 async function detectFile(file) {
   const fd = new FormData();
   fd.append('file', file);
-  const r = await fetch(API + '/api/finance/detect', { method: 'POST', body: fd });
+  const r = await fetch(relUrl('api/finance/detect'), { method: 'POST', body: fd });
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
@@ -1650,7 +1896,7 @@ async function uploadFileToAccount(file, account, autoProcess = true) {
   fd.append('file', file);
   fd.append('account', account);
   fd.append('auto_process', autoProcess ? 'true' : 'false');
-  const r = await fetch(API + '/api/finance/upload', { method: 'POST', body: fd });
+  const r = await fetch(relUrl('api/finance/upload'), { method: 'POST', body: fd });
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
     throw new Error(err.detail?.message || JSON.stringify(err.detail) || r.statusText);
@@ -1947,11 +2193,20 @@ function renderCategoryStatsTable(items) {
   const el = $('#cat-stats-table');
   if (!el) return;
   if (!items?.length) { el.innerHTML = '<p class="empty">Ingen data för vald period.</p>'; return; }
-  el.innerHTML = `<div class="cat-stats-grid">${items.map(it => `
-    <div class="cat-stat-row">
-      <span class="cat-name">${escapeHtml(it.category)}</span>
+  el.innerHTML = `<div class="cat-stats-grid">${items.map((it, i) => {
+    const hex = financeCategoryHex(it.category);
+    return `<div class="cat-stat-row cat-stat-click" data-cat-idx="${i}" role="button" tabindex="0" style="border-left-color:${hex}">
+      <span class="cat-name" style="color:${hex}">${escapeHtml(it.category)}</span>
       <span class="cat-meta">${it.count} st · ${formatMoney(it.total)}</span>
-    </div>`).join('')}</div>`;
+    </div>`;
+  }).join('')}</div>`;
+  el.querySelectorAll('.cat-stat-click').forEach(row => {
+    const category = items[+row.dataset.catIdx]?.category;
+    if (!category) return;
+    const pick = () => applyCategoryFilterFromChart(category);
+    row.addEventListener('click', pick);
+    row.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+  });
 }
 
 function renderCategoryBreakdownChart(items, subtitle) {
@@ -1963,6 +2218,20 @@ function renderCategoryBreakdownChart(items, subtitle) {
   const sorted = [...(items || [])].sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
   const labels = sorted.map(i => i.category);
   const values = sorted.map(i => Math.abs(i.total));
+  const breakdownOpts = {
+    responsive: true,
+    maintainAspectRatio: false,
+    onClick: chartPickLabel(applyCategoryFilterFromChart),
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#8b93a8', maxRotation: 55, minRotation: 35, font: { size: 10 } }, grid: { display: false } },
+      y: {
+        ticks: { color: '#8b93a8', callback: v => new Intl.NumberFormat('sv-SE', { notation: 'compact' }).format(v) },
+        grid: { color: 'rgba(255,255,255,0.05)' },
+        beginAtZero: true,
+      },
+    },
+  };
   state.charts.catBreakdown = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -1970,35 +2239,24 @@ function renderCategoryBreakdownChart(items, subtitle) {
       datasets: [{
         label: 'Utgifter (kr)',
         data: values,
-        backgroundColor: 'rgba(124, 108, 255, 0.65)',
+        backgroundColor: financeCategoryChartColors(labels),
         borderRadius: 4,
       }],
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      scales: {
-        x: { ticks: { color: '#8b93a8', maxRotation: 55, minRotation: 35, font: { size: 10 } }, grid: { display: false } },
-        y: {
-          ticks: { color: '#8b93a8', callback: v => new Intl.NumberFormat('sv-SE', { notation: 'compact' }).format(v) },
-          grid: { color: 'rgba(255,255,255,0.05)' },
-          beginAtZero: true,
-        },
-      },
-    },
+    options: breakdownOpts,
   });
+  state.charts.catBreakdown.options.onHover = chartPointerHover(state.charts.catBreakdown);
 }
 
 async function loadCategoryTransactions() {
+  await ensureFinanceCategories(true);
   const v = state.categoryView;
   const range = catDateRange();
   const params = new URLSearchParams({
     limit: v.limit,
     offset: v.offset,
-    sort_by: 'txn_date',
-    sort_dir: 'desc',
-    exclude_overforing: 'true',
+    sort_by: v.sortBy || 'txn_date',
+    sort_dir: v.sortDir || 'desc',
   });
   if (range.year) params.set('year', range.year);
   if (range.date_from) { params.set('date_from', range.date_from); params.set('date_to', range.date_to); }
@@ -2007,19 +2265,31 @@ async function loadCategoryTransactions() {
   if (v.search) params.set('search', v.search);
 
   const data = await api('/api/finance/transactions?' + params);
-  renderCategoryTxnTable(data.items || [], data.total || 0);
+  renderCategoryTxnTable(data.items || [], data.total || 0, data.sum_amount ?? 0);
 }
 
-function renderCategoryTxnTable(rows, total) {
+function renderCategoryTxnTable(rows, total, sumAmount = 0) {
   const wrap = $('#cat-txn-table');
   if (!wrap) return;
+  const v = state.categoryView;
   if (!rows.length) {
     wrap.innerHTML = '<p class="empty">Inga transaktioner matchar.</p>';
     $('#cat-pagination').innerHTML = '';
     return;
   }
+  const sortClass = (col) => `sortable ${v.sortBy === col ? 'sorted-' + v.sortDir : ''}`;
+  const sumClass = sumAmount >= 0 ? 'amount-pos' : 'amount-neg';
   wrap.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Datum</th><th>Beskrivning</th><th>Konto</th><th>Kategori</th><th>Belopp</th></tr></thead>
+    <thead><tr>
+      <th class="${sortClass('txn_date')}" data-sort="txn_date">Datum</th>
+      <th class="${sortClass('description')}" data-sort="description">Beskrivning</th>
+      <th class="${sortClass('account')}" data-sort="account">Konto</th>
+      <th class="${sortClass('category')}" data-sort="category">Kategori</th>
+      <th class="${sortClass('amount')} cat-amount-col" data-sort="amount">
+        <span class="cat-amount-sum ${sumClass}" title="Summa (${total} transaktioner)">${formatMoney(sumAmount)}</span>
+        <span class="cat-amount-label">Belopp</span>
+      </th>
+    </tr></thead>
     <tbody>${rows.map(t => `<tr data-txn-id="${t.id}">
       <td>${formatDate(t.txn_date)}</td>
       <td>${escapeHtml(t.description)}</td>
@@ -2028,25 +2298,37 @@ function renderCategoryTxnTable(rows, total) {
       <td class="${t.amount >= 0 ? 'amount-pos' : 'amount-neg'}">${formatMoney(t.amount)}</td>
     </tr>`).join('')}</tbody></table></div>`;
 
+  wrap.querySelectorAll('th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (v.sortBy === col) v.sortDir = v.sortDir === 'asc' ? 'desc' : 'asc';
+      else { v.sortBy = col; v.sortDir = 'desc'; }
+      v.offset = 0;
+      loadCategoryTransactions();
+    });
+  });
+
   wrap.querySelectorAll('[data-cat-edit]').forEach(sel => {
+    sel.addEventListener('focus', () => { sel.dataset.prevCategory = sel.value; });
     sel.addEventListener('change', async () => {
       const id = sel.dataset.catEdit;
       const category = sel.value;
+      const prevCategory = sel.dataset.prevCategory || category;
       try {
-        await api(`/api/finance/transactions/${id}/category`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ category }),
-        });
+        const saved = await saveTransactionCategory(id, category, prevCategory);
+        if (saved.cancelled) {
+          sel.value = prevCategory;
+          return;
+        }
         sel.closest('tr')?.classList.add('row-saved');
-        loadCategoriesPage();
+        loadCategoriesPage(true);
       } catch (e) {
+        sel.value = prevCategory;
         alert('Kunde inte spara: ' + e.message);
       }
     });
   });
 
-  const v = state.categoryView;
   const pages = Math.ceil(total / v.limit);
   const page = Math.floor(v.offset / v.limit) + 1;
   const pag = $('#cat-pagination');
@@ -2061,11 +2343,13 @@ function renderCategoryTxnTable(rows, total) {
 
 async function loadCategoriesPage(skipStats = false) {
   initCategoryControls();
+  state.financeCategories = [];
   await ensureFinanceCategories();
   const catSel = $('#cat-filter-category');
-  if (catSel && !catSel.dataset.filled) {
-    catSel.dataset.filled = '1';
+  if (catSel) {
+    const cur = catSel.value || state.categoryView.category;
     catSel.innerHTML = '<option value="">Alla kategorier</option>' + categoryOptions();
+    catSel.value = cur;
   }
 
   const v = state.categoryView;

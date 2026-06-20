@@ -6,8 +6,12 @@ Smart underhållsplanerare och privatekonomi för villan — Custom Add-on för 
 
 | Väg | URL | Auth |
 |-----|-----|------|
-| **Home Assistant Ingress** | Sidebar → Operation Bredehall | HA-inloggning |
-| **Direkt port (LAN/Tailscale)** | `http://<host>:8765` | API-nyckel (`app_api_key` i addon-config) |
+| **Direkt port (LAN/Tailscale)** | `http://<host>:8765` | API-nyckel (`app_api_key` i add-on-konfig) |
+| **Från Home Assistant** | Add-on → **Öppna webbgränssnittet** | Samma som ovan |
+
+**Tailscale (mobil):** `http://<HA Tailscale-IP>:8765` — t.ex. `http://100.x.x.x:8765`. Ange API-nyckeln under **Inställningar** i appen första gången.
+
+Add-on använder **egen port** (som Trafik-Dashboard), inte HA Ingress.
 
 Lokal utveckling utan API-nyckel:
 
@@ -23,7 +27,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 
 - Sätt **`app_api_key`** i add-on options vid exponering via Tailscale eller öppen port.
 - Webbläsaren sparar nyckeln i `sessionStorage` (fält under Inställningar).
-- Via **Ingress** behövs ingen separat nyckel — Home Assistant autentiserar redan.
+- Add-on körs på **port 8765** — ingen Ingress-proxyn.
 - Mass-radering av transaktioner (`DELETE /api/finance/transactions`) är borttagen; dev-wipe kräver `ALLOW_WIPE=1`.
 
 ## Funktioner
@@ -49,8 +53,8 @@ pytest tests/ -v
 
 1. Lägg till repot under **Add-ons → Add-on store → Repositories**
 2. **Install → Start**
-3. Valfritt: sätt `app_api_key` under add-on **Configuration**
-4. Öppna via sidebar (Ingress) eller port 8765
+3. Sätt **`app_api_key`** under add-on **Configuration** (rekommenderas vid Tailscale)
+4. Öppna **Öppna webbgränssnittet** eller gå till `http://<host>:8765`
 
 Se **STRUCTURE.md** för filöversikt.
 

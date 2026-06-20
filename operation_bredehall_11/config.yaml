@@ -1,6 +1,6 @@
 name: "Operation Bredehall 11"
 description: "Smart underhållsplanerare för villan – uppgifter, vyer och AI-assistent"
-version: "0.3.0"
+version: "0.3.1"
 arch:
   - aarch64
   - amd64
@@ -13,8 +13,12 @@ startup: application
 boot: auto
 host_network: false
 
-ingress: true
-ingress_port: 8765
+# Direkt port (som Trafik-Dashboard) — nås via LAN/Tailscale på host:8765.
+# Ingress av — undviker trasig CSS/API under HA-proxyn.
+ingress: false
+
+webui: "http://[HOST]:[PORT:8765]/"
+watchdog: "http://[HOST]:[PORT:8765]/health"
 panel_icon: mdi:home-analytics
 panel_title: Operation Bredehall
 
@@ -40,4 +44,4 @@ ports:
   8765/tcp: 8765
 
 ports_description:
-  8765/tcp: "Webbgränssnitt för underhållsplaneraren (kräver API-nyckel vid direkt åtkomst)"
+  8765/tcp: "Webbgränssnitt (LAN/Tailscale). Sätt app_api_key i konfigurationen."

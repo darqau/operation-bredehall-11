@@ -147,6 +147,18 @@ class FinanceUploadResult(BaseModel):
 
 class FinanceCategoryUpdate(BaseModel):
     category: str
+    apply_to_similar: bool = False
+
+
+class FinanceSimilarTransactionsResponse(BaseModel):
+    description: str
+    total: int
+    others: int
+
+
+class FinanceCategoryUpdateResponse(BaseModel):
+    transaction: FinanceTransactionResponse
+    updated_count: int
 
 
 class FinanceAiApplyRequest(BaseModel):

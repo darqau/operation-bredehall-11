@@ -4,12 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Operation Bredehall 11</title>
+  <script>
+    (function () {
+      var path = location.pathname;
+      if (!path.endsWith('/')) path += '/';
+      document.write('<base href="' + path + '">');
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/css/app.css?v=17">
-  <script src="/static/vendor/chart.umd.min.js"></script>
-  <script src="/static/vendor/hammer.min.js"></script>
-  <script src="/static/vendor/chartjs-plugin-zoom.min.js"></script>
+  <link rel="stylesheet" href="static/css/app.css?v=26">
+  <script src="static/vendor/chart.umd.min.js"></script>
+  <script src="static/vendor/hammer.min.js"></script>
+  <script src="static/vendor/chartjs-plugin-zoom.min.js"></script>
 </head>
 <body>
   <div class="overlay-sidebar" id="sidebar-overlay"></div>
@@ -64,7 +71,7 @@
               <option>Värme</option><option>Annat</option>
             </select>
             <button class="btn btn-primary" id="btn-new-task">+ Ny uppgift</button>
-            <a class="btn" href="/api/calendar/ical" download="bredehall.ics">📅 Kalender</a>
+            <a class="btn" href="api/calendar/ical" download="bredehall.ics">📅 Kalender</a>
           </div>
           <div id="task-list"></div>
           <div id="completion-log" class="hidden"></div>
@@ -219,7 +226,7 @@
           </div>
           <div class="card" style="margin-bottom:1rem">
             <h3 class="section-title">Konton över tid (aktiv period &amp; saldo)</h3>
-            <p class="chart-hint" style="margin-bottom:0.5rem">Varje stapel visar kontots aktiva period (första → senaste transaktion). Aktuellt saldo visas vid stapelns slut.</p>
+            <p class="chart-hint" style="margin-bottom:0.5rem">Alla konton börjar till vänster vid tidigaste kända data. Stapelns längd och slutdatum visar senaste transaktion (logaritmisk tidsaxel). Saldo och månad visas vid stapelns högra ände.</p>
             <div class="chart-box chart-box-lg" id="chart-timeline-box"><canvas id="chart-timeline"></canvas></div>
           </div>
 
@@ -380,6 +387,6 @@
     </div>
   </aside>
 
-  <script src="/static/js/app.js?v=17"></script>
+  <script src="static/js/app.js?v=26"></script>
 </body>
 </html>

@@ -27,7 +27,7 @@ def _migrate_finance_on_startup() -> None:
     """Persist config renames and fix mis-filed Patrik Nordea transactions."""
     import json
 
-    from app.crud_finance import migrate_house_purchase_duplicates, migrate_patrik_lonekonto_transactions
+    from app.crud_finance import migrate_el_category, migrate_house_purchase_duplicates, migrate_patrik_lonekonto_transactions
     from app.database import SessionLocal
     from app.services.finance.config import CONFIG_PATH, get_finance_config, migrate_legacy_config, save_finance_config
 
@@ -53,6 +53,7 @@ def _migrate_finance_on_startup() -> None:
     try:
         migrate_patrik_lonekonto_transactions(db)
         migrate_house_purchase_duplicates(db)
+        migrate_el_category(db)
     except Exception:
         logger.exception("Finance data migration failed")
         db.rollback()
@@ -73,7 +74,20 @@ async def lifespan(app: FastAPI):
     seed_loans_if_empty()
     _migrate_finance_on_startup()
     _tag_internal_transfers_on_startup()
+    _sync_finance_categories_static()
     yield
+
+
+def _sync_finance_categories_static() -> None:
+    """Write sorted category list for frontend (works even if API cache is stale)."""
+    import json
+
+    from app.services.finance.categorizer import sorted_categories
+
+    path = STATIC_DIR / "data" / "finance-categories.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"categories": sorted_categories()}
+    path.write_text(json.dumps({**payload, "count": len(payload["categories"])}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _tag_internal_transfers_on_startup() -> None:

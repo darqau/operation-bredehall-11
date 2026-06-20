@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
 
-from app.crud_finance import create_transactions_bulk
+from app.crud_finance import apply_learned_category, create_transactions_bulk, get_learned_categories
 from app.services.finance.categorizer import enrich_transaction
 from app.services.finance.config import (
     FINANCE_ARCHIVE,
@@ -28,10 +28,11 @@ def _read_csv_text(path: Path) -> str:
     return raw.decode("latin-1", errors="replace")
 
 
-def _rows_from_csv(content: str, account: str, filename: str, config: Dict[str, Any]) -> List[dict]:
+def _rows_from_csv(content: str, account: str, filename: str, config: Dict[str, Any], learned: dict | None = None) -> List[dict]:
     own_regex = config.get("own_accounts_regex") or ""
     delimiter = config.get("csv_delimiter") or ";"
     rows = []
+    learned = learned or {}
     for parsed in parse_bank_csv(content, delimiter=delimiter):
         row = {
             **parsed,
@@ -39,6 +40,7 @@ def _rows_from_csv(content: str, account: str, filename: str, config: Dict[str, 
             "source_file": filename,
             "is_manual": False,
         }
+        apply_learned_category(row, learned)
         enrich_transaction(row, own_regex)
         rows.append(row)
     return rows
@@ -66,12 +68,13 @@ def process_local_folders(db: Session, config: Dict[str, Any]) -> Dict[str, Any]
     processed: List[str] = []
     errors: List[str] = []
 
+    learned = get_learned_categories(db)
     for account in folder_map:
         inbox = local_inbox_for_account(account)
         for path in sorted(inbox.glob("*.csv")):
             try:
                 content = _read_csv_text(path)
-                rows = _rows_from_csv(content, account, path.name, config)
+                rows = _rows_from_csv(content, account, path.name, config, learned)
                 if rows:
                     all_rows.extend(rows)
                     pending_moves.append((account, path.name, path, _archive_target(path, account)))
@@ -110,10 +113,11 @@ def process_local_folders(db: Session, config: Dict[str, Any]) -> Dict[str, Any]
 
 def process_gdrive(db: Session, config: Dict[str, Any]) -> Dict[str, Any]:
     items, processed, errors = fetch_account_csvs(config)
+    learned = get_learned_categories(db)
     all_rows: List[dict] = []
     for item in items:
         try:
-            rows = _rows_from_csv(item["content"], item["account"], item["filename"], config)
+            rows = _rows_from_csv(item["content"], item["account"], item["filename"], config, learned)
             all_rows.extend(rows)
         except Exception as e:
             errors.append(f"{item['account']}/{item['filename']}: {e}")
@@ -152,6 +156,7 @@ def process_bank_files(db: Session) -> Dict[str, Any]:
 def add_manual_entry(db: Session, entry: dict, config: Dict[str, Any] | None = None) -> dict:
     cfg = config or get_finance_config()
     own_regex = cfg.get("own_accounts_regex") or ""
+    learned = get_learned_categories(db)
     row = {
         "txn_date": entry["txn_date"],
         "amount": float(entry["amount"]),
@@ -165,6 +170,7 @@ def add_manual_entry(db: Session, entry: dict, config: Dict[str, Any] | None = N
         "is_manual": True,
         "manual_category": entry.get("category"),
     }
+    apply_learned_category(row, learned)
     enrich_transaction(row, own_regex)
     from app.crud_finance import create_transaction
 

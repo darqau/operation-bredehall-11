@@ -19,9 +19,11 @@ from app.crud_finance import (
     get_uncategorized,
     list_loans,
     list_transactions,
-    recategorize_rules,
+    migrate_el_category,
+    sum_transactions,
     sum_loans,
     update_loan,
+    similar_transaction_info,
     update_transaction_category,
     upsert_loans,
 )
@@ -29,6 +31,8 @@ from app.database import get_db
 from app.schemas import (
     FinanceAiApplyRequest,
     FinanceCategoryUpdate,
+    FinanceCategoryUpdateResponse,
+    FinanceSimilarTransactionsResponse,
     FinanceConfigUpdate,
     FinanceFolderCreate,
     FinanceLoanCreate,
@@ -41,7 +45,7 @@ from app.schemas import (
     FinanceTransactionResponse,
     FinanceUploadResult,
 )
-from app.services.finance.categorizer import CATEGORIES
+from app.services.finance.categorizer import CATEGORIES, sorted_categories
 from app.services.finance.config import FINANCE_INBOX, get_finance_config, save_finance_config
 from app.services.finance.dashboard import build_dashboard, build_hero, build_meta
 from app.services.finance.detect import detect_account
@@ -267,7 +271,8 @@ def transactions(
     )
     items = list_transactions(db, sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset, **filters)
     total = count_transactions(db, **filters)
-    return {"total": total, "offset": offset, "limit": limit, "items": items}
+    sum_amount = sum_transactions(db, **filters)
+    return {"total": total, "offset": offset, "limit": limit, "sum_amount": sum_amount, "items": items}
 
 
 @router.post("/manual", response_model=FinanceTransactionResponse, status_code=201)
@@ -310,8 +315,16 @@ def recategorize(
     cfg = get_finance_config()
     if method == "rules":
         changed = recategorize_rules(db, cfg.get("own_accounts_regex") or "", only_ovrigt=only_ovrigt)
+        el = migrate_el_category(db)
         internal = detect_internal_transfers(db, own_accounts_regex=cfg.get("own_accounts_regex") or "")
-        return {"ok": True, "method": "rules", "changed": changed, "internal_transfers": internal}
+        return {
+            "ok": True,
+            "method": "rules",
+            "changed": changed + el["retagged_el"],
+            "rules_changed": changed,
+            "el_retagged": el["retagged_el"],
+            "internal_transfers": internal,
+        }
 
     _require_ai_enabled(cfg)
     from app.services.finance.ai_finance import categorize_with_ai
@@ -340,7 +353,7 @@ def recategorize(
 
 @router.get("/categories")
 def list_categories():
-    return {"categories": CATEGORIES}
+    return {"categories": sorted_categories()}
 
 
 @router.get("/categories/stats")
@@ -357,7 +370,15 @@ def categories_stats(
     }
 
 
-@router.patch("/transactions/{txn_id}/category", response_model=FinanceTransactionResponse)
+@router.get("/transactions/{txn_id}/similar", response_model=FinanceSimilarTransactionsResponse)
+def get_similar_transactions(txn_id: int, db: Session = Depends(get_db)):
+    info = similar_transaction_info(db, txn_id)
+    if not info:
+        raise HTTPException(status_code=404, detail="Transaktion hittades inte")
+    return info
+
+
+@router.patch("/transactions/{txn_id}/category", response_model=FinanceCategoryUpdateResponse)
 def patch_transaction_category(
     txn_id: int,
     body: FinanceCategoryUpdate,
@@ -365,10 +386,12 @@ def patch_transaction_category(
 ):
     if body.category not in CATEGORIES:
         raise HTTPException(status_code=400, detail=f"Ogiltig kategori. Välj en av: {', '.join(CATEGORIES)}")
-    updated = update_transaction_category(db, txn_id, body.category)
+    updated, updated_count = update_transaction_category(
+        db, txn_id, body.category, apply_to_similar=body.apply_to_similar
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Transaktion hittades inte")
-    return updated
+    return FinanceCategoryUpdateResponse(transaction=updated, updated_count=updated_count)
 
 
 @router.get("/ai/queue")

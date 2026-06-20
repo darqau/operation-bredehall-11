@@ -20,6 +20,7 @@ CATEGORIES: List[str] = [
     "Restaurang & Uteät",
     "Systembolaget",
     "Boende & Drift",
+    "Boende (el)",
     "Hushållstjänster",
     "Försäkring",
     "Skönhet & Tjänster",
@@ -45,6 +46,23 @@ CATEGORIES: List[str] = [
 ]
 
 
+def sorted_categories(items: Optional[List[str]] = None) -> List[str]:
+    """Return categories in Swedish alphabetical order."""
+    cats = list(items if items is not None else CATEGORIES)
+    try:
+        import locale
+
+        for loc in ("sv_SE.UTF-8", "Swedish_Sweden.1252", "sv_SE"):
+            try:
+                locale.setlocale(locale.LC_COLLATE, loc)
+                return sorted(cats, key=locale.strxfrm)
+            except locale.Error:
+                continue
+    except Exception:
+        pass
+    return sorted(cats, key=str.casefold)
+
+
 def normalize_description(desc: str) -> str:
     """Strip card prefixes, dates and reference noise so merchant names match."""
     text = (desc or "").lower()
@@ -66,6 +84,28 @@ def _match(pattern: str, text: str) -> bool:
     return bool(re.search(pattern, text, re.IGNORECASE))
 
 
+# Shared el-provider matching (ASCII + Swedish spellings — bank exports often drop å/ä/ö).
+EL_PROVIDER_PATTERN = (
+    r"g[öo]teborg energi|gbg energi|goteborg energi|"
+    r"ellevio|vattenfall|fortum|\beon\b|e\.on|dinel|kraftringen|"
+    r"elnät|eln[aä]t|elhandel|elavtal|el\s*bill|tibber|greenely|bixia|telge energi|"
+    r"skellefte[åa]\s*kraft|fortum\s*market|vattenfall\s*eldist|"
+    r"partille energi|m[öo]lndal energi|kung[äa]lv energi|h[äa]rryda energi|"
+    r"\bgeab\b|\bdin el\b|energi din el|cheap energy|boo energy|elify|"
+    r"jämtkraft|jamtkraft|lule[åa] energi|ume[åa] energi|skekraft|"
+    r"gotlands energi|kalmar energi|linde energi|mellanskan"
+)
+
+
+def is_el_expense(description: str) -> bool:
+    """True when description looks like a household electricity bill/payment."""
+    if not description:
+        return False
+    norm = normalize_description(description)
+    raw = " ".join(description.split()).casefold()
+    return bool(_match(EL_PROVIDER_PATTERN, norm) or _match(EL_PROVIDER_PATTERN, raw))
+
+
 # Ordered most-specific → least-specific. First hit wins.
 CATEGORY_RULES: List[Tuple[str, str]] = [
     (r"slutlikvid", "Bostadsköp (engång)"),
@@ -78,8 +118,10 @@ CATEGORY_RULES: List[Tuple[str, str]] = [
     # Restaurants
     (r"restaurang|pizza|pizzeria|sushi|foodora|max burger|o'?learys|mcdonald|burger king|espresso house|\bwolt\b|starbucks|subway|\bkfc\b|chopchop|café|cafe|bistro|\bkrog\b|thai|kebab|nystekt|gateau|waynes|barista|deli|uber\s*eats|ubereats|systrarna|brödernas|taco|sushibar|olstugan|\bpub\b|tullen|food", "Restaurang & Uteät"),
     (r"systembolaget|vinmonopolet", "Systembolaget"),
-    # Housing & utilities
-    (r"\bhyra\b|\bhsb\b|bolån|brf\b|samfällighet|amorter|göteborg energi|gbg energi|ellevio|vattenfall|fortum|\beon\b|e\.on|dinel|kraftringen|tekniska verken|telge energi|fjärrvärme|elnät|elhandel|renhållning|sophämtning|va-avgift|hyresavi", "Boende & Drift"),
+    # Electricity (before general housing so el providers match first)
+    (EL_PROVIDER_PATTERN, "Boende (el)"),
+    # Housing & utilities (incl. Nordea mortgage debits — not internal transfers)
+    (r"\bhyra\b|\bhsb\b|bolån|brf\b|samfällighet|amorter|omsättning lån|låneomsättning|oms\.? lån|tekniska verken|fjärrvärme|renhållning|sophämtning|va-avgift|hyresavi", "Boende & Drift"),
     (r"hemfrid|veterankraft|städ|flyttstäd|sotning|securitas|verisure|sector alarm|larm\b|trädgård", "Hushållstjänster"),
     # Insurance
     (r"lassie|agria|folksam|\btrygg\b|trygg-hansa|if skade|if skadeförs|svedea|moderna försäkr|hedvig|tandvård försäkr|nordea liv|livförsäkring|länsförsäkring|lansforsakring|dina försäkr|gjensidige|ica försäkr", "Försäkring"),
@@ -117,7 +159,7 @@ def classify_typ(
 
     transfer_text = _match(
         r"egen överföring|överföring mellan|mellan konton|lysa spar|\bsavings\b|"
-        r"överföring \d|överf\b.*spar|spar.*överf|omsättning lån|låneomsättning|oms lån|oms\. lån|"
+        r"överföring \d|överf\b.*spar|spar.*överf|"
         r"extraamortering",
         desc,
     )
@@ -157,6 +199,10 @@ def categorize(
         return "Inkomst (Swish)"
 
     for pattern, label in CATEGORY_RULES:
+        if label == "Boende (el)" and is_el_expense(description):
+            if typ == "Inkomst":
+                continue
+            return label
         if _match(pattern, norm):
             # Income rows shouldn't be tagged as an expense category
             if typ == "Inkomst" and label not in (

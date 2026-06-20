@@ -249,6 +249,23 @@ def count_transactions(db: Session, **filters) -> int:
     return q.count()
 
 
+def sum_transactions(db: Session, **filters) -> float:
+    q = db.query(func.coalesce(func.sum(FinanceTransaction.amount), 0.0))
+    q = _apply_txn_filters(
+        q,
+        account=filters.get("account"),
+        category=filters.get("category"),
+        typ=filters.get("typ"),
+        year=filters.get("year"),
+        date_from=filters.get("date_from"),
+        date_to=filters.get("date_to"),
+        search=filters.get("search"),
+        exclude_overforing=filters.get("exclude_overforing", False),
+        max_amount=filters.get("max_amount"),
+    )
+    return round(float(q.scalar() or 0), 2)
+
+
 def delete_transaction(db: Session, txn_id: int) -> bool:
     txn = db.query(FinanceTransaction).filter(FinanceTransaction.id == txn_id).first()
     if not txn:
@@ -265,16 +282,46 @@ def clear_all_transactions(db: Session) -> int:
     return count
 
 
+def get_learned_categories(db: Session) -> dict[str, str]:
+    """Map exact bank descriptions to user-chosen categories (from locked rows)."""
+    mapping: dict[str, str] = {}
+    rows = (
+        db.query(FinanceTransaction.description, FinanceTransaction.category)
+        .filter(FinanceTransaction.category_locked == True)  # noqa: E712
+        .order_by(FinanceTransaction.id.asc())
+        .all()
+    )
+    for desc, cat in rows:
+        if desc and cat:
+            mapping[desc] = cat
+    return mapping
+
+
+def apply_learned_category(row: dict, learned: dict[str, str]) -> None:
+    if row.get("manual_category"):
+        return
+    desc = row.get("description") or ""
+    if desc in learned:
+        row["manual_category"] = learned[desc]
+
+
 def recategorize_rules(db: Session, own_accounts_regex: str, only_ovrigt: bool = False) -> int:
     """Re-run the rule-based classifier over stored transactions."""
     from app.services.finance.categorizer import categorize, classify_typ
 
+    learned = get_learned_categories(db)
     q = db.query(FinanceTransaction)
     if only_ovrigt:
         q = q.filter(FinanceTransaction.category == "Övrigt")
     changed = 0
     for t in q.all():
         if t.is_manual or getattr(t, "category_locked", False):
+            continue
+        if t.description in learned:
+            cat = learned[t.description]
+            if t.category != cat:
+                t.category = cat
+                changed += 1
             continue
         new_typ = classify_typ(t.amount, t.description, t.sender, t.receiver, own_accounts_regex)
         new_cat = categorize(t.description, new_typ, amount=t.amount)
@@ -388,15 +435,51 @@ def count_uncategorized(db: Session) -> int:
     )
 
 
-def update_transaction_category(db: Session, txn_id: int, category: str) -> Optional[FinanceTransaction]:
+def count_similar_by_description(
+    db: Session, description: str, *, exclude_id: Optional[int] = None
+) -> int:
+    if not description:
+        return 0
+    q = db.query(func.count(FinanceTransaction.id)).filter(
+        FinanceTransaction.description == description
+    )
+    if exclude_id is not None:
+        q = q.filter(FinanceTransaction.id != exclude_id)
+    return int(q.scalar() or 0)
+
+
+def similar_transaction_info(db: Session, txn_id: int) -> Optional[dict]:
     t = db.query(FinanceTransaction).filter(FinanceTransaction.id == txn_id).first()
     if not t:
         return None
-    t.category = category.strip()
-    t.category_locked = True
+    others = count_similar_by_description(db, t.description, exclude_id=txn_id)
+    return {"description": t.description or "", "total": others + 1, "others": others}
+
+
+def update_transaction_category(
+    db: Session, txn_id: int, category: str, *, apply_to_similar: bool = False
+) -> tuple[Optional[FinanceTransaction], int]:
+    t = db.query(FinanceTransaction).filter(FinanceTransaction.id == txn_id).first()
+    if not t:
+        return None, 0
+    cat = category.strip()
+    if apply_to_similar and t.description:
+        rows = (
+            db.query(FinanceTransaction)
+            .filter(FinanceTransaction.description == t.description)
+            .all()
+        )
+    else:
+        rows = [t]
+    updated = 0
+    for row in rows:
+        if row.category != cat or not getattr(row, "category_locked", False):
+            row.category = cat
+            row.category_locked = True
+            updated += 1
     db.commit()
     db.refresh(t)
-    return t
+    return t, updated
 
 
 def category_stats(
@@ -539,6 +622,28 @@ def sum_loans(db: Session) -> float:
     return round(float(total or 0), 2)
 
 
+def migrate_el_category(db: Session) -> dict:
+    """Move electricity payments to Boende (el)."""
+    from app.services.finance.categorizer import is_el_expense
+
+    changed = 0
+    for txn in db.query(FinanceTransaction).all():
+        if getattr(txn, "category_locked", False):
+            continue
+        if txn.category == "Boende (el)":
+            continue
+        if txn.amount >= 0:
+            continue
+        if not is_el_expense(txn.description):
+            continue
+        if txn.typ != "Utgift" or txn.category != "Boende (el)":
+            txn.typ = "Utgift"
+            txn.category = "Boende (el)"
+            changed += 1
+    db.commit()
+    return {"retagged_el": changed}
+
+
 _CROSS_ACCOUNT_DEDUP_KEYWORDS = ("slutlikvid", "omsättning lån", "omsattning lan", "extraamortering")
 
 
@@ -586,10 +691,22 @@ def migrate_house_purchase_duplicates(db: Session) -> dict:
                 db.delete(txn)
                 deduped += 1
 
+    retagged_mortgage = 0
+    for txn in db.query(FinanceTransaction).all():
+        if getattr(txn, "category_locked", False):
+            continue
+        desc_cf = _normalized_description(txn.description)
+        if ("omsättning lån" in desc_cf or "omsattning lan" in desc_cf) and txn.amount < 0:
+            if txn.typ == "Överföring" or txn.category == "Överföring":
+                txn.typ = "Utgift"
+                txn.category = "Boende & Drift"
+                retagged_mortgage += 1
+
     db.commit()
     return {
         "retagged_extraamortering": retagged_extra,
         "retagged_slutlikvid": retagged_slut,
+        "retagged_mortgage": retagged_mortgage,
         "deduped": deduped,
     }
 

@@ -9,6 +9,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import FinanceLoan, FinanceTransaction
+from app.services.finance.categorizer import CATEGORIES, sorted_categories
 from app.services.finance.config import account_number_for, get_finance_config
 
 
@@ -131,7 +132,12 @@ def build_meta(db: Session) -> Dict[str, Any]:
     cfg = get_finance_config()
     account_numbers = cfg.get("account_numbers") or {}
     accounts = [r[0] for r in db.query(FinanceTransaction.account).distinct().order_by(FinanceTransaction.account).all()]
-    categories = [r[0] for r in db.query(FinanceTransaction.category).distinct().order_by(FinanceTransaction.category).all()]
+    db_categories = [r[0] for r in db.query(FinanceTransaction.category).distinct().all()]
+    merged_categories = list(CATEGORIES)
+    for cat in db_categories:
+        if cat and cat not in merged_categories:
+            merged_categories.append(cat)
+    categories = sorted_categories(merged_categories)
     typs = [r[0] for r in db.query(FinanceTransaction.typ).distinct().order_by(FinanceTransaction.typ).all()]
     year_rows = db.query(FinanceTransaction.txn_date).distinct().all()
     years = sorted({r[0].year for r in year_rows if r[0]}, reverse=True)
