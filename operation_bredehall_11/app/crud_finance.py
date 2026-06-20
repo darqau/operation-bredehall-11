@@ -250,9 +250,8 @@ def count_transactions(db: Session, **filters) -> int:
 
 
 def sum_transactions(db: Session, **filters) -> float:
-    q = db.query(func.coalesce(func.sum(FinanceTransaction.amount), 0.0))
     q = _apply_txn_filters(
-        q,
+        db.query(FinanceTransaction),
         account=filters.get("account"),
         category=filters.get("category"),
         typ=filters.get("typ"),
@@ -263,7 +262,8 @@ def sum_transactions(db: Session, **filters) -> float:
         exclude_overforing=filters.get("exclude_overforing", False),
         max_amount=filters.get("max_amount"),
     )
-    return round(float(q.scalar() or 0), 2)
+    result = q.with_entities(func.coalesce(func.sum(FinanceTransaction.amount), 0.0)).scalar()
+    return round(float(result or 0), 2)
 
 
 def delete_transaction(db: Session, txn_id: int) -> bool:

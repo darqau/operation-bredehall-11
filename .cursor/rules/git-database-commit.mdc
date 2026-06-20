@@ -1,0 +1,38 @@
+---
+description: Stop local dev server and flush SQLite before committing bredehall.db
+alwaysApply: true
+---
+
+# Git commit med databas
+
+`operation_bredehall_11/data/bredehall.db` är canonical data i git. HA får samma fil vid add-on-uppdatering.
+
+## Innan commit/push som inkluderar databasen
+
+Gör detta **själv** — be inte användaren stoppa servern manuellt.
+
+1. **Stoppa lokal uvicorn** (port 8890, ev. 8888/8876):
+   ```powershell
+   $conn = Get-NetTCPConnection -LocalPort 8890 -ErrorAction SilentlyContinue | Select-Object -First 1
+   if ($conn) { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue }
+   Start-Sleep -Seconds 1
+   ```
+
+2. **Skriv ihop databasen** (WAL → huvudfil):
+   ```powershell
+   python -c "import sqlite3; c=sqlite3.connect(r'operation_bredehall_11/data/bredehall.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+   ```
+
+3. **Stage och commit** `data/bredehall.db` och `data/finance_config.json` om de ändrats.
+
+4. **Starta om servern** om användaren kan behöva den efteråt (valfritt, fråga inte — starta om om den kördes innan).
+
+## Committa aldrig
+
+- `data/bredehall.db-wal`, `data/bredehall.db-shm`
+- `data/finance/` (CSV-arkiv)
+- `__pycache__`, `1.0.0`
+
+## Efter push
+
+Påminn kort: HA add-on → uppdatera → Återuppbygg → Starta om (synkar git-databas till `/data`).
