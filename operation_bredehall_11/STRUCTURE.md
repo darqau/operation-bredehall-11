@@ -38,3 +38,36 @@ operation_bredehall_11/
 - HA add-on: vid start kopieras bundlade filer till `/data` om innehållet skiljer sig
 - Lokal dev läser/skriver samma `data/`-mapp — ingen separat databas
 - Stoppa lokal server innan commit så databasen hinner stängas rent (se Inställningar i appen)
+
+## Ekonomiflöde
+
+```text
+app/static/js/app.js
+  → app/routers/finance.py
+    → services/finance/upload.py      # spara CSV i inbox per konto
+    → services/finance/processor.py   # läs inbox/Drive, parse, arkivera
+    → services/finance/csv_parser.py  # svenska bankformat, belopp/datum
+    → services/finance/categorizer.py # typ + kategori via regler
+    → crud_finance.py                 # dedup, låsning, överföringar, lån
+    → services/finance/dashboard.py   # summeringar/grafer
+```
+
+Viktiga gränser:
+
+- `data/finance/inbox/` och `data/finance/archive/` är arbetsmappar och gitignored.
+- `create_transactions_bulk()` hoppar över CSV-dubbletter med konto + datum + öresbelopp + normaliserad beskrivning.
+- `update_transaction_category(..., apply_to_similar=True)` låser exakt samma bankbeskrivning och blir inlärning för kommande importer.
+- `detect_internal_transfers()` parar motsatta belopp mellan olika konton inom 3 dagar och kräver överföringssignal i text eller `own_accounts_regex`.
+- `ai_finance.py` används bara när finance config har `ai_enabled=true`; annars är reglerna den säkra baslinjen.
+
+## Startup och migrationer
+
+`app/main.py` kör vid start:
+
+1. `sync_bundled_data()` kopierar git-versionen av `bredehall.db` och `finance_config.json` till `/data` i HA-containern när hash skiljer.
+2. `init_db()` skapar saknade tabeller.
+3. `run_migrations()` kör idempotenta SQLite-patchar och sätter WAL.
+4. Seed fyller tom uppgifts-/lånedata.
+5. Finance-migreringar rättar kända historiska dataproblem och backfillar interna överföringar.
+
+Det betyder att schemaändringar ska läggas i `app/migrations.py` och tåla att köras varje start.
