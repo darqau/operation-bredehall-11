@@ -58,6 +58,49 @@ CSV-arkivet (`data/finance/`) stannar på datorn (gitignored) — transaktionern
 
 Repot innehåller riktig ekonomidata — håll det **privat** på GitHub.
 
+## Ekonomi: import och kategorisering
+
+Ekonomidelen har en tydlig dataflödeskedja:
+
+1. Konton definieras i `data/finance_config.json` (`folder_map` + `account_numbers`).
+2. CSV-filer sparas per konto i `data/finance/inbox/<konto>/` via uppladdning eller lokal filkopiering.
+3. Importen läser inboxen, skapar transaktioner i `data/bredehall.db` och flyttar lyckade filer till `data/finance/archive/<konto>/`.
+4. Dashboard, kategorier och lån läser sedan bara från SQLite.
+
+`data/finance/` är ett lokalt arbetsarkiv och ska inte committas. Det som ska sparas långsiktigt är databasen och `finance_config.json`.
+
+### Vanligt importflöde
+
+1. Lägg in konton under **Inställningar** i appen, eller direkt i `data/finance_config.json`.
+2. Exportera CSV från banken.
+3. Ladda upp filen i appen. Om kontonummer matchar `account_numbers` väljs konto automatiskt, annars behöver du välja konto.
+4. Låt `auto_process` vara på, eller kör **Processa** efteråt.
+5. Granska kategorin **Övrigt** och lås rätt kategori via kategorisidan. Välj "applicera på liknande" när samma bankbeskrivning ska få samma kategori framåt.
+6. När ändringarna ska följa med till Home Assistant: stoppa lokal server så WAL skrivs in, commit/push `data/bredehall.db` och `data/finance_config.json`.
+
+### CSV-format och begränsningar
+
+- Uppladdning är begränsad till **10 MB per fil**.
+- Parsern stödjer svenska bankexporter med `;` eller `,` som avgränsare.
+- Vanliga kolumner som känns igen: `Bokföringsdag`/`Datum`/`Transaktionsdag`, `Belopp`, `Text`/`Beskrivning`/`Rubrik`/`Referens`, samt valfritt `Saldo`, `Avsändare`, `Mottagare`, `Valuta`.
+- Kodningar som provas vid lokal import: `utf-8-sig`, `utf-8`, `cp1252`, `latin-1`.
+- Dubbletter från CSV hoppas över per konto med nyckeln konto + datum + belopp i ören + normaliserad beskrivning. Manuella transaktioner räknas inte in i den dedupliceringen.
+- Vid DB-fel flyttas lokala filer inte till arkivet; de ligger kvar i inboxen för ny körning.
+
+### Kategorisering
+
+- Regelbaserad kategorisering körs först och kräver ingen AI.
+- Manuellt valda kategorier låses (`category_locked`) och används som inlärda exakta beskrivningsmatchningar vid senare importer.
+- **Regelkör om** (`/api/finance/recategorize?method=rules`) hoppar över manuella/låsta rader och kan begränsas till `only_ovrigt=true`.
+- Interna överföringar markeras som `Överföring` när motsatta belopp hittas på olika konton inom 3 dagar och text/egen-konto-regex ger stöd för att det är en egen överföring.
+- AI-kategorisering är valfri. Den kräver `ai_enabled=true` och en OpenAI-kompatibel endpoint (`ai_base_url`, `ai_api_key`, `ai_model`). Förslag under confidence `0.55` lämnas som `Övrigt`.
+
+### Google Drive-läge
+
+`storage_mode = "gdrive"` i `finance_config.json` gör att importen läser CSV från Drive-mappar i `folder_map` (HA-option `finance_storage_mode` används bara när config skapas första gången). Det kräver service-account credentials via `gdrive_credentials_path`, miljövariabeln `GDRIVE_CREDENTIALS_PATH`, eller filen `data/gdrive_credentials.json`/`/data/gdrive_credentials.json`. Om `archive_folder_id` är satt flyttas Drive-filer dit efter hämtning.
+
+För canonical data i git är lokal import enklast: kör importen lokalt, kontrollera resultatet i appen och committa bara SQLite/config-filerna.
+
 ## Konfiguration
 
 - **`data/finance_config.json`** — konton, mappar, AI (följer med i git)
