@@ -45,16 +45,60 @@ All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. File
 | **Datorn** (`127.0.0.1:8890`) | Läser `data/bredehall.db` direkt |
 | **Home Assistant / Tailscale** (`:8765`) | Får samma fil från git vid omstart (automatisk kopiering om innehållet skiljer sig) |
 
-### Rutin efter ändringar
+### Så synken fungerar
+
+Vid add-on-start kör FastAPI `app.data_sync.sync_bundled_data()` innan tabeller, migreringar och seed-data initieras. Den jämför SHA-256 för filerna i add-on-bundlen (`/app/data`) mot den persistenta HA-volymen (`/data`) och kopierar bara när innehållet skiljer sig.
+
+Synken omfattar bara:
+
+- `bredehall.db`
+- `finance_config.json`
+
+Lokalt pekar appen på repots `data/`-mapp direkt, eftersom `/data` normalt inte finns. Om `DATA_DIR` är satt används den katalogen i stället.
+
+### Rutin efter dataändringar
 
 1. Gör ändringar lokalt på datorn.
-2. **Stoppa** den lokala servern (Ctrl+C) innan du sparar till git. Medan appen kör håller den databasen öppen — då riskerar git att missa det senaste. Tillfälliga sidofiler (`.db-wal`, `.db-shm`) försvinner när servern stoppats och allt skrivits in i huvudfilen.
-3. Commit och push (`data/bredehall.db` + `data/finance_config.json`).
-4. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
+2. Stoppa lokal uvicorn om den kör på någon devport:
+
+   ```bash
+   for port in 8890 8888 8876; do
+     pid="$(lsof -ti tcp:$port || true)"
+     [ -n "$pid" ] && kill "$pid"
+   done
+   ```
+
+3. Skriv ihop SQLite WAL till huvudfilen innan commit:
+
+   ```bash
+   python - <<'PY'
+   import sqlite3
+   conn = sqlite3.connect("data/bredehall.db")
+   conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+   conn.close()
+   PY
+   ```
+
+4. Commit och push bara den kanoniska datan:
+
+   ```bash
+   git add data/bredehall.db data/finance_config.json
+   git commit -m "Update canonical Bredehall data"
+   git push
+   ```
+
+5. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**. Vid start kopieras git-versionen till `/data` om den skiljer sig.
 
 **OBS:** Ändringar du bara gör via mobil/Tailscale följer inte med till git automatiskt. Gör ekonomiändringar på datorn om de ska sparas i repot.
 
-CSV-arkivet (`data/finance/`) stannar på datorn (gitignored) — transaktionerna finns redan i databasen.
+Committa inte:
+
+- `data/bredehall.db-wal`
+- `data/bredehall.db-shm`
+- `data/finance/` (CSV-inbox och arkiv)
+- `data/gdrive_credentials.json`
+
+CSV-arkivet (`data/finance/`) stannar på datorn (gitignored). Vid lokal CSV-import flyttas filer från `data/finance/inbox/<konto>` till `data/finance/archive/<konto>` först efter lyckad DB-insert; vid DB-fel ligger filerna kvar i inboxen.
 
 Repot innehåller riktig ekonomidata — håll det **privat** på GitHub.
 
