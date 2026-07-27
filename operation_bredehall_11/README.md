@@ -36,6 +36,54 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 - Ekonomi: CSV-import, kategorisering (regler + valfri lokal AI), grafer, bolån/skulder
 - Kategorisida med inline-redigering
 
+## Ekonomi
+
+Ekonomidelen samlar banktransaktioner, kategorier och lån i samma SQLite-databas som
+underhållsplaneringen. Flödet är avsett för lokal granskning först och därefter git-sync
+till Home Assistant.
+
+### Importflöde
+
+1. Konton och mappar ligger i `data/finance_config.json`.
+2. CSV-filer läggs i `data/finance/inbox/<konto>` eller laddas upp via
+   `POST /api/finance/upload`.
+3. `POST /api/finance/process` parsar filerna, sätter `typ` och `category`, skriver rader
+   till databasen och flyttar lokala filer till `data/finance/archive/<konto>` först efter
+   lyckad DB-import.
+
+Dedup för bankrader görs på konto, datum, belopp i öre och normaliserad beskrivning.
+Manuella rader dedupliceras inte på samma sätt. Efter import körs intern
+överföringsdetektion och matchade par märks som `Överföring`.
+
+### Transaktioner och dashboard
+
+`GET /api/finance/transactions` använder samma filter för listan, `total` och
+`sum_amount`:
+
+```text
+/api/finance/transactions?account=Gemensamt&year=2026&category=Livsmedel&limit=50
+```
+
+Stödda filter är `account`, `category`, `typ`, `year`, `date_from`, `date_to`,
+`search`, `exclude_overforing` och `max_amount`. Sortering stöder `txn_date`, `amount`,
+`description`, `account` och `category`; `limit` är max 500.
+
+`GET /api/finance/dashboard` använder samma analysfilter. Om `year` saknas visas alla år.
+Diagrammen filtrerar dessutom bort `Överföring`, `Bostadsköp (engång)`, beskrivningar med
+`slutlikvid` och rader över `chart_max_amount` (100000 som standard) så engångshändelser
+inte dominerar graferna. Saldon och nettoförmögenhet hämtas från senaste bankrapporterade
+saldo per konto plus sparade lån/skulder (`/api/finance/loans`).
+
+### Kategorisering
+
+- Regelmotorn finns i `app/services/finance/categorizer.py` och kan köras om med
+  `POST /api/finance/recategorize?method=rules`.
+- Inline-ändringar låser kategorin (`category_locked`) och återanvänds för framtida
+  importer med exakt samma bankbeskrivning.
+- `apply_to_similar` uppdaterar alla befintliga transaktioner med samma beskrivning.
+- Valfri AI-kategorisering använder finansinställningarna i `finance_config.json`, inte
+  underhållsmodulens OpenAI-inställning.
+
 ## Data — en databas, samma överallt
 
 All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. Filen ligger i git tillsammans med **`data/finance_config.json`**. Det är den enda källan — du behöver inte importera CSV igen när Home Assistant uppdateras.
