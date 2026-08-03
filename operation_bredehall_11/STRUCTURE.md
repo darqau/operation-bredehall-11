@@ -38,3 +38,24 @@ operation_bredehall_11/
 - HA add-on: vid start kopieras bundlade filer till `/data` om innehållet skiljer sig
 - Lokal dev läser/skriver samma `data/`-mapp — ingen separat databas
 - Stoppa lokal server innan commit så databasen hinner stängas rent (se Inställningar i appen)
+
+## Ekonomiflöde
+
+```
+CSV upload/inbox
+  → services/finance/upload.py      # sanerar filnamn, skapar inbox per konto
+  → services/finance/processor.py   # läser local/gdrive, arkiverar efter DB-skrivning
+  → services/finance/csv_parser.py  # bank-CSV → normaliserade rader
+  → services/finance/categorizer.py # typ/kategori-regler + egna överföringar
+  → crud_finance.py                 # dedup, CRUD, kategorilås, lån
+  → routers/finance.py              # /api/finance/*
+```
+
+Viktiga gränser:
+
+- `crud_finance._apply_txn_filters()` är den gemensamma sanningen för
+  transaktionslistans `items`, `total` och `sum_amount`.
+- `services/finance/dashboard.py` har egna aggregeringar för dashboard/hero och
+  exkluderar stora engångshändelser bara från tidsserier, inte från den sparade
+  transaktionshistoriken.
+- `data/finance/` är ett lokalt arbets-/arkivområde och ska inte committas.
