@@ -36,6 +36,62 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 - Ekonomi: CSV-import, kategorisering (regler + valfri lokal AI), grafer, bolån/skulder
 - Kategorisida med inline-redigering
 
+## Ekonomi: import, filter och summeringar
+
+Ekonomidelen utgår från konton i **`data/finance_config.json`**. Varje konto får en lokal inbox under `data/finance/inbox/<konto>` och arkiv under `data/finance/archive/<konto>`. CSV-arkivet är gitignored; när importen lyckas är databasen den sparade sanningen.
+
+### CSV-import
+
+- `POST /api/finance/detect` försöker hitta konto från filnamn/innehåll.
+- `POST /api/finance/upload` tar en CSV-fil (max 10 MB), skapar konto vid behov och kör import direkt om `auto_process=true`.
+- `POST /api/finance/process` läser alla lokala inbox-mappar, skriver transaktioner till SQLite och flyttar filer till arkiv först efter lyckad DB-import.
+- `storage_mode=gdrive` hämtar i stället CSV via Google Drive-konfigurationen.
+
+Dubbletter hoppas över per konto med fingeravtrycket `datum + belopp i ören + normaliserad beskrivning`. Manuella transaktioner (`POST /api/finance/manual`) räknas inte som CSV-dubbletter.
+
+### Transaktions-API
+
+`GET /api/finance/transactions` returnerar:
+
+```json
+{
+  "total": 123,
+  "offset": 0,
+  "limit": 100,
+  "sum_amount": -4567.89,
+  "items": []
+}
+```
+
+Filter gäller för både `items`, `total` och **`sum_amount`** innan paginering:
+
+| Parameter | Beteende |
+|-----------|----------|
+| `account`, `category`, `typ` | Exakt matchning |
+| `year` | Hela året, men bara om `date_from`/`date_to` saknas |
+| `date_from`, `date_to` | ISO-datum, inkluderande intervall |
+| `search` | Söker i beskrivning; `%` och `_` behandlas som vanlig text |
+| `exclude_overforing=true` | Tar bort `typ="Överföring"` |
+| `max_amount` | Tar bara rader där `abs(amount) <= max_amount` |
+| `sort_by` | `txn_date`, `amount`, `description`, `account`, `category` |
+| `sort_dir` | `asc` eller `desc` |
+| `limit`, `offset` | `limit` är 1-500 |
+
+Exempel:
+
+```text
+/api/finance/transactions?year=2026&category=Mat&exclude_overforing=true&limit=50
+/api/finance/transactions?date_from=2026-01-01&date_to=2026-03-31&search=ica
+```
+
+### Dashboard och nyckeltal
+
+- `GET /api/finance/dashboard` använder samma grundfilter som transaktionslistan plus `chart_max_amount`.
+- Om `year` saknas visas alla år i graferna.
+- Diagrammen filtrerar bort kategorierna `Överföring` och `Bostadsköp (engång)`, texter som innehåller `slutlikvid`, samt rader över `chart_max_amount`.
+- Senaste banksaldo per konto och kontohistorik är avsiktligt ofiltrerade översikter.
+- `GET /api/finance/hero` summerar tillgångar, skulder och nettoförmögenhet; interna överföringar exkluderas från netto/inkomst/utgift som standard.
+
 ## Data — en databas, samma överallt
 
 All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. Filen ligger i git tillsammans med **`data/finance_config.json`**. Det är den enda källan — du behöver inte importera CSV igen när Home Assistant uppdateras.
@@ -48,9 +104,14 @@ All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. File
 ### Rutin efter ändringar
 
 1. Gör ändringar lokalt på datorn.
-2. **Stoppa** den lokala servern (Ctrl+C) innan du sparar till git. Medan appen kör håller den databasen öppen — då riskerar git att missa det senaste. Tillfälliga sidofiler (`.db-wal`, `.db-shm`) försvinner när servern stoppats och allt skrivits in i huvudfilen.
-3. Commit och push (`data/bredehall.db` + `data/finance_config.json`).
-4. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
+2. **Stoppa** den lokala servern innan du sparar till git. Medan appen kör håller SQLite-databasen öppen — då riskerar git att missa det senaste.
+3. Skriv ihop WAL till huvudfilen om databasen varit öppen (kör från `operation_bredehall_11/`):
+   ```bash
+   python -c "import sqlite3; c=sqlite3.connect('data/bredehall.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+   ```
+4. Kontrollera att du bara committar `data/bredehall.db` och vid behov `data/finance_config.json` — aldrig `data/bredehall.db-wal`, `data/bredehall.db-shm` eller `data/finance/`.
+5. Commit och push.
+6. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
 
 **OBS:** Ändringar du bara gör via mobil/Tailscale följer inte med till git automatiskt. Gör ekonomiändringar på datorn om de ska sparas i repot.
 
