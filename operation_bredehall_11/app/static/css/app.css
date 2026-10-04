@@ -538,7 +538,7 @@ tr:last-child td { border-bottom: none; }
 }
 @media (min-width: 1100px) {
   .fin-workspace {
-    grid-template-columns: minmax(17.5rem, 20rem) 1fr;
+    grid-template-columns: minmax(20.5rem, 23rem) 1fr;
     gap: 1.25rem;
   }
 }
@@ -1398,9 +1398,17 @@ th.sortable.sorted-desc::after { content: ' ↓'; }
 .fin-compare-meta-cat { color: var(--text-muted); font-weight: 400; }
 .fin-period-custom {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.5rem;
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
   margin-top: 0.5rem;
+}
+.fin-period-custom .field { min-width: 0; }
+.fin-period-custom .input[type="date"] {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  /* Extra room so Chromium’s calendar icon isn’t clipped */
+  padding-right: 0.35rem;
 }
 .fin-period-custom.hidden { display: none !important; }
 .fin-sidebar-toggle {
