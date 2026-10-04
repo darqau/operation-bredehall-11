@@ -35,6 +35,7 @@ operation_bredehall_11/
 ## Data
 
 - **`bredehall.db`** + **`finance_config.json`** committas till git (privat repo)
-- HA add-on: vid start kopieras bundlade filer till `/data` om innehållet skiljer sig
-- Lokal dev läser/skriver samma `data/`-mapp — ingen separat databas
+- HA add-on: vid start kopieras bundlade filer till `/data` om innehållet skiljer sig (`DATA_DIR=/data` i Dockerfile)
+- **Lokal utveckling:** alltid `operation_bredehall_11/data/` — `launch.py` sätter `DATA_DIR`; utan env används samma mapp automatiskt
+- Använd **inte** `c:\data` på Windows (tidigare bugg — borttagen)
 - Stoppa lokal server innan commit så databasen hinner stängas rent (se Inställningar i appen)

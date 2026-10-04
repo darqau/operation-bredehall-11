@@ -1,6 +1,6 @@
 """Pydantic-schemas för API (request/response)."""
 from datetime import date, datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -118,6 +118,8 @@ class FinanceConfigUpdate(BaseModel):
     ai_base_url: Optional[str] = None
     ai_api_key: Optional[str] = None
     ai_model: Optional[str] = None
+    ai_timeout_seconds: Optional[int] = None
+    ai_batch_size: Optional[int] = None
 
 
 class FinanceProcessResult(BaseModel):
@@ -129,6 +131,48 @@ class FinanceProcessResult(BaseModel):
     processed: list
     errors: list
     internal_transfers: int = 0
+    by_account: list = []
+    unknown_files: list = []
+    rerouted: list = []
+
+
+class FinanceActivityLogResponse(BaseModel):
+    id: int
+    created_at: datetime
+    event_type: str
+    account: Optional[str] = None
+    filename: Optional[str] = None
+    transaction_count: int = 0
+    skipped_count: int = 0
+    summary: str
+    details: Optional[Any] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FinanceActivityLogListResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: List[FinanceActivityLogResponse]
+
+
+class FinanceAiReviewedItem(BaseModel):
+    id: int
+    txn_date: date
+    description: str
+    amount: float
+    account: str
+    category: str
+    category_locked: bool = True
+    is_ovrigt: bool = False
+
+
+class FinanceAiReviewedListResponse(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: List[FinanceAiReviewedItem]
 
 
 class FinanceFolderCreate(BaseModel):

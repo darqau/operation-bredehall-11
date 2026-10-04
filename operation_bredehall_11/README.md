@@ -13,7 +13,7 @@ Smart underhållsplanerare och privatekonomi för villan — Custom Add-on för 
 
 Add-on använder **egen port** (som Trafik-Dashboard), inte HA Ingress.
 
-Lokal utveckling utan API-nyckel:
+Lokal utveckling utan API-nyckel (läser/skriver `data/` i denna mapp):
 
 ```bash
 cd operation_bredehall_11
@@ -21,7 +21,13 @@ pip install -r requirements.txt
 python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8890
 ```
 
+Alternativt: **`Start Bredehall.exe`** sätter `DATA_DIR` automatiskt till `./data`.
+
 Öppna http://127.0.0.1:8890 — ingen nyckel krävs om `APP_API_KEY` inte är satt.
+
+**Windows:** dubbelklicka **`Start Bredehall.exe`** (eller `Start Bredehall.bat`) i `operation_bredehall_11/`. Exe öppnar samma cmd-fönster som .bat och startar servern. Webbläsaren öppnas automatiskt. Stäng via **Stäng** i appen eller stäng konsolfönstret.
+
+**Bygg om exe** (`build_launcher.bat`) bara om du ändrat **`launch.py`** (port, webbadress, Python-sökning). Appkod, databas och UI kräver inte ny exe — bara omstart av servern.
 
 ## Säkerhet
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="bredehall_test_"))
+os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="bredehall_test_")
 os.environ.pop("APP_API_KEY", None)
 os.environ.pop("ALLOW_WIPE", None)
 

@@ -1,7 +1,7 @@
 """
 SQLite-setup för Operation Bredehall 11.
 Skapar engine, session och initierar tabeller.
-Databasfil placeras i /data så att den persisterar mellan omstarter (HA add-on).
+Databasfil: DATA_DIR/bredehall.db (lokal dev: operation_bredehall_11/data; HA: /data via env).
 """
 import os
 from pathlib import Path
@@ -11,13 +11,13 @@ from sqlalchemy.orm import sessionmaker, Session
 
 from app.models import Base
 
-# Home Assistant add-on: /data är persistent volym; annars lokal fil
+# DATA_DIR: explicit env (launch.py / HA Dockerfile) eller bundlad data/ i projektet.
+# HA-containern sätter DATA_DIR=/data — vi gissar inte c:\data på Windows.
 _env_data = os.environ.get("DATA_DIR")
 if _env_data:
     DATA_DIR = Path(_env_data)
 else:
-    _ha = Path("/data")
-    DATA_DIR = _ha if _ha.is_dir() else Path(__file__).resolve().parent.parent / "data"
+    DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / "bredehall.db"

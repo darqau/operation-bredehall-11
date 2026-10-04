@@ -12,6 +12,26 @@ from app.models import FinanceLoan, FinanceTransaction
 from app.services.finance.categorizer import CATEGORIES, sorted_categories
 from app.services.finance.config import account_number_for, get_finance_config
 
+_INCOME_CATEGORIES = frozenset({
+    "Lön",
+    "Bidrag",
+    "Ränta/Avkastning",
+    "Inkomst (Swish)",
+    "Övrig inkomst",
+})
+
+
+def _compare_flow(categories: Optional[List[str]]) -> str:
+    """expense | income | mixed — styr amount-filter i kontojämförelse."""
+    if not categories:
+        return "expense"
+    income = sum(1 for c in categories if c in _INCOME_CATEGORIES)
+    if income == len(categories):
+        return "income"
+    if income == 0:
+        return "expense"
+    return "mixed"
+
 
 def _month_key(d: date) -> str:
     return f"{d.year}-{d.month:02d}"
@@ -48,7 +68,11 @@ def _shift_month(year: int, month: int, delta: int) -> tuple[int, int]:
 
 
 def _latest_balance_per_account(db: Session) -> Dict[str, float]:
-    """Latest bank-reported balance per account (tie-break: highest id on max date)."""
+    """Latest bank-reported balance per account.
+
+    Nordea SPARKONTO CSVs list newest rows first — tie-break: lowest id on max date.
+    Other exports (e.g. Swedbank) are chronological — tie-break: highest id.
+    """
     subq = (
         db.query(
             FinanceTransaction.account,
@@ -64,16 +88,63 @@ def _latest_balance_per_account(db: Session) -> Dict[str, float]:
             (FinanceTransaction.account == subq.c.account)
             & (FinanceTransaction.txn_date == subq.c.max_date),
         )
-        .order_by(FinanceTransaction.account.asc(), FinanceTransaction.id.desc())
+        .order_by(FinanceTransaction.account.asc(), FinanceTransaction.id.asc())
         .all()
     )
-    latest: Dict[str, float] = {}
+    by_account: Dict[str, list[FinanceTransaction]] = {}
     for r in bal_rows:
-        if r.account in latest:
+        by_account.setdefault(r.account, []).append(r)
+
+    latest: Dict[str, float] = {}
+    for account, rows in by_account.items():
+        if not rows:
             continue
-        if r.balance is not None:
-            latest[r.account] = r.balance
+
+        def _tie_key(txn: FinanceTransaction) -> tuple[int, int]:
+            sf = (txn.source_file or "").casefold()
+            if "sparkonto" in sf:
+                return (0, txn.id)
+            return (1, -txn.id)
+
+        pick = min(rows, key=_tie_key)
+        if pick.balance is not None:
+            latest[account] = pick.balance
     return latest
+
+
+def _continuous_month_series(
+    monthly: Dict[str, float],
+    first_date: date,
+    max_date: date,
+) -> List[float]:
+    series: List[float] = []
+    y, m = first_date.year, first_date.month
+    while (y, m) <= (max_date.year, max_date.month):
+        series.append(round(monthly.get(f"{y}-{m:02d}", 0.0), 2))
+        y, m = _shift_month(y, m, 1)
+    return series
+
+
+def _rolling_averages(series: List[float]) -> dict[str, float]:
+    def _avg(values: List[float]) -> float:
+        return round(sum(values) / len(values), 2) if values else 0.0
+
+    return {
+        "avg_total": _avg(series),
+        "avg_3m": _avg(series[-3:]),
+        "avg_12m": _avg(series[-12:]),
+        "months": len(series),
+    }
+
+
+def _category_monthly_expenses(txns: List[FinanceTransaction]) -> Dict[str, Dict[str, float]]:
+    """Monthly spend per category (positive kr/month)."""
+    by_cat: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for t in txns:
+        if t.amount >= 0:
+            continue
+        by_cat[t.category][_month_key(t.txn_date)] += abs(t.amount)
+    return by_cat
 
 
 def _months_ago(d: date, months: int) -> date:
@@ -238,16 +309,17 @@ def build_dashboard(
     monthly_expenses: Dict[str, float] = defaultdict(float)
     monthly_income: Dict[str, float] = defaultdict(float)
     monthly_net: Dict[str, float] = defaultdict(float)
+    monthly_expense_counts: Dict[str, int] = defaultdict(int)
+    monthly_expense_by_cat: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     category_totals: Dict[str, float] = defaultdict(float)
     typ_totals: Dict[str, float] = defaultdict(float)
     chart_dedup_seen: set[tuple] = set()
+    chart_dedup_removed = 0
     chart_capped_count = 0
 
     for t in txns:
         mk = _month_key(t.txn_date)
         typ_totals[t.typ] = typ_totals.get(t.typ, 0) + t.amount
-        if t.amount < 0:
-            category_totals[t.category] += t.amount
 
         if _is_chart_excluded(t, exclude_overforing=exclude_overforing, chart_max_amount=chart_max_amount):
             if chart_max_amount and chart_max_amount > 0 and abs(t.amount) > chart_max_amount:
@@ -256,18 +328,36 @@ def build_dashboard(
 
         dedup_key = (t.txn_date, round(t.amount, 2), _chart_desc_key(t.description))
         if dedup_key in chart_dedup_seen:
+            chart_dedup_removed += 1
             continue
         chart_dedup_seen.add(dedup_key)
 
         monthly_net[mk] += t.amount
         if t.amount < 0:
             monthly_expenses[mk] += t.amount
+            monthly_expense_counts[mk] += 1
+            monthly_expense_by_cat[mk][t.category] += t.amount
+            category_totals[t.category] += t.amount
         elif t.amount > 0:
             monthly_income[mk] += t.amount
 
     months_sorted = sorted(set(monthly_net.keys()) | set(monthly_expenses.keys()) | set(monthly_income.keys()))
+
+    def _monthly_expense_row(m: str) -> dict:
+        by_cat = monthly_expense_by_cat.get(m) or {}
+        top_cats = sorted(
+            [{"category": k, "amount": round(v, 2)} for k, v in by_cat.items()],
+            key=lambda x: x["amount"],
+        )[:5]
+        return {
+            "month": m,
+            "amount": round(monthly_expenses.get(m, 0), 2),
+            "count": monthly_expense_counts.get(m, 0),
+            "by_category": top_cats,
+        }
+
     net_series = [{"month": m, "amount": round(monthly_net.get(m, 0), 2)} for m in months_sorted]
-    expense_series = [{"month": m, "amount": round(monthly_expenses.get(m, 0), 2)} for m in months_sorted]
+    expense_series = [_monthly_expense_row(m) for m in months_sorted]
     income_series = [{"month": m, "amount": round(monthly_income.get(m, 0), 2)} for m in months_sorted]
 
     top_categories = sorted(
@@ -276,6 +366,8 @@ def build_dashboard(
     )[:15]
 
     filtered_count = len(txns)
+    chart_expense_total = round(sum(monthly_expenses.values()), 2)
+    chart_income_total = round(sum(monthly_income.values()), 2)
     sum_income = round(sum(t.amount for t in txns if t.amount > 0 and t.typ != "Överföring"), 2)
     sum_expense = round(sum(t.amount for t in txns if t.amount < 0), 2)
     sum_net = round(sum(t.amount for t in txns if t.typ != "Överföring"), 2)
@@ -297,6 +389,7 @@ def build_dashboard(
         },
         "chart_excludes": {
             "capped_count": chart_capped_count,
+            "dedup_removed": chart_dedup_removed,
             "excluded_categories": sorted(_CHART_EXCLUDED_CATEGORIES),
             "chart_max_amount": chart_max_amount,
         },
@@ -310,6 +403,8 @@ def build_dashboard(
             "expense": sum_expense,
             "net": sum_net,
             "count": filtered_count,
+            "chart_expense": chart_expense_total,
+            "chart_income": chart_income_total,
         },
         "net_income_over_time": net_series,
         "monthly_expenses": expense_series,
@@ -361,26 +456,17 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
         monthly_net[_month_key(t.txn_date)] += t.amount
 
     net_avg = {"avg_total": 0.0, "avg_3m": 0.0, "avg_12m": 0.0, "months": 0}
+    category_averages: Dict[str, dict] = {}
     if monthly_net:
         max_date = max(t.txn_date for t in txns)
         first_date = min(t.txn_date for t in txns)
+        net_series = _continuous_month_series(monthly_net, first_date, max_date)
+        net_avg = _rolling_averages(net_series)
 
-        # Build a continuous month series from first to last (gaps count as 0).
-        series: List[float] = []
-        y, m = first_date.year, first_date.month
-        while (y, m) <= (max_date.year, max_date.month):
-            series.append(round(monthly_net.get(f"{y}-{m:02d}", 0.0), 2))
-            y, m = _shift_month(y, m, 1)
-
-        def _avg(values: List[float]) -> float:
-            return round(sum(values) / len(values), 2) if values else 0.0
-
-        net_avg = {
-            "avg_total": _avg(series),
-            "avg_3m": _avg(series[-3:]),
-            "avg_12m": _avg(series[-12:]),
-            "months": len(series),
-        }
+        by_cat = _category_monthly_expenses(txns)
+        for cat, months in by_cat.items():
+            cat_series = _continuous_month_series(months, first_date, max_date)
+            category_averages[cat] = _rolling_averages(cat_series)
 
     # ── Top expense categories: last month + last 12 months ─────────────
     def _top_expenses(since: Optional[date]) -> List[Dict[str, Any]]:
@@ -432,6 +518,7 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
             for l in loans
         ],
         "net_income": net_avg,
+        "category_averages": category_averages,
         "top_expenses_month": _top_expenses(month_since),
         "top_expenses_year": _top_expenses(year_since),
         "month_label": month_label,
@@ -450,4 +537,79 @@ def build_hero(db: Session, exclude_internal: bool = True) -> Dict[str, Any]:
             }
             for t in recent_rows
         ],
+    }
+
+
+def build_account_compare(
+    db: Session,
+    account_a: str,
+    account_b: str,
+    categories: Optional[List[str]] = None,
+    year: Optional[int] = None,
+    month_from: Optional[str] = None,
+    month_to: Optional[str] = None,
+    months: int = 12,
+    exclude_overforing: bool = True,
+    chart_max_amount: Optional[float] = 100000,
+) -> Dict[str, Any]:
+    """Monthly totals for two accounts (expenses or income, by category)."""
+    account_a = (account_a or "").strip()
+    account_b = (account_b or "").strip()
+    if not account_a or not account_b:
+        return {"error": "Välj två konton"}
+    if account_a == account_b:
+        return {"error": "Välj två olika konton"}
+
+    cats = [c.strip() for c in (categories or []) if c and c.strip()]
+    flow = _compare_flow(cats)
+    # Inkomst (t.ex. lön) ska inte kapas vid 100k — annars blir jämförelsen 0.
+    cap = chart_max_amount if flow != "income" else None
+
+    q = db.query(FinanceTransaction).filter(
+        FinanceTransaction.account.in_([account_a, account_b]),
+    )
+    if flow == "expense":
+        q = q.filter(FinanceTransaction.amount < 0)
+    elif flow == "income":
+        q = q.filter(FinanceTransaction.amount > 0)
+    if exclude_overforing:
+        q = q.filter(FinanceTransaction.typ != "Överföring")
+    if cats:
+        q = q.filter(FinanceTransaction.category.in_(cats))
+    if year:
+        q = q.filter(func.strftime("%Y", FinanceTransaction.txn_date) == str(year))
+
+    by_month: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for t in q.order_by(FinanceTransaction.txn_date.asc()).all():
+        if _is_chart_excluded(t, exclude_overforing=exclude_overforing, chart_max_amount=cap):
+            continue
+        by_month[_month_key(t.txn_date)][t.account] += abs(t.amount)
+
+    month_list = sorted(by_month.keys())
+    if month_from and month_to:
+        month_list = [m for m in month_list if month_from <= m <= month_to]
+    elif year:
+        month_list = [m for m in month_list if m.startswith(f"{year}-")]
+    elif months > 0 and month_list:
+        month_list = month_list[-months:]
+
+    series = [
+        {
+            "month": m,
+            "a": round(by_month[m].get(account_a, 0.0), 2),
+            "b": round(by_month[m].get(account_b, 0.0), 2),
+        }
+        for m in month_list
+    ]
+    return {
+        "account_a": account_a,
+        "account_b": account_b,
+        "categories": cats,
+        "flow": flow,
+        "months": month_list,
+        "series": series,
+        "totals": {
+            "a": round(sum(row["a"] for row in series), 2),
+            "b": round(sum(row["b"] for row in series), 2),
+        },
     }

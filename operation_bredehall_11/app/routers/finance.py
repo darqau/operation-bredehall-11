@@ -18,6 +18,7 @@ from app.crud_finance import (
     detect_internal_transfers,
     get_uncategorized,
     list_loans,
+    list_locked_transactions,
     list_transactions,
     migrate_el_category,
     sum_transactions,
@@ -29,7 +30,11 @@ from app.crud_finance import (
 )
 from app.database import get_db
 from app.schemas import (
+    FinanceActivityLogListResponse,
+    FinanceActivityLogResponse,
     FinanceAiApplyRequest,
+    FinanceAiReviewedItem,
+    FinanceAiReviewedListResponse,
     FinanceCategoryUpdate,
     FinanceCategoryUpdateResponse,
     FinanceSimilarTransactionsResponse,
@@ -47,9 +52,14 @@ from app.schemas import (
 )
 from app.services.finance.categorizer import CATEGORIES, sorted_categories
 from app.services.finance.config import FINANCE_INBOX, get_finance_config, save_finance_config
-from app.services.finance.dashboard import build_dashboard, build_hero, build_meta
+from app.services.finance.dashboard import build_account_compare, build_dashboard, build_hero, build_meta
 from app.services.finance.detect import detect_account
 from app.services.finance.processor import process_bank_files
+from app.services.finance.activity_log import (
+    list_activity_log,
+    log_finance_activity,
+    parse_activity_details,
+)
 from app.services.finance.upload import create_account_folder, save_upload_to_inbox
 
 router = APIRouter(prefix="/api/finance", tags=["finance"])
@@ -111,11 +121,40 @@ def list_folders():
 
 
 @router.post("/folders")
-def add_folder(body: FinanceFolderCreate):
+def add_folder(body: FinanceFolderCreate, db: Session = Depends(get_db)):
     try:
-        return create_account_folder(body.name, body.drive_folder_id)
+        result = create_account_folder(body.name, body.drive_folder_id)
+        if result.get("created"):
+            log_finance_activity(
+                db,
+                event_type="account_created",
+                account=body.name.strip(),
+                summary=f"Nytt konto skapat: {body.name.strip()}",
+            )
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/activity-log", response_model=FinanceActivityLogListResponse)
+def read_activity_log(
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    event_type: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    rows, total = list_activity_log(db, limit=limit, offset=offset, event_type=event_type)
+    items = []
+    for r in rows:
+        item = FinanceActivityLogResponse.model_validate(r)
+        item.details = parse_activity_details(r.details)
+        items.append(item)
+    return FinanceActivityLogListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        items=items,
+    )
 
 
 @router.post("/detect")
@@ -172,7 +211,8 @@ async def upload_csv(
     saved = save_upload_to_inbox(chosen, filename, raw)
     process_result = None
     if auto_process:
-        process_result = FinanceProcessResult(**process_bank_files(db))
+        trusted = {f"{chosen}/{saved['filename']}"}
+        process_result = FinanceProcessResult(**process_bank_files(db, trusted_keys=trusted))
 
     return FinanceUploadResult(
         ok=True,
@@ -249,7 +289,10 @@ def dashboard(
 @router.get("/transactions")
 def transactions(
     account: Optional[str] = None,
+    accounts: Optional[str] = Query(None, description="Kommaseparerade konton (jämförelse)"),
     category: Optional[str] = None,
+    categories: Optional[str] = Query(None, description="Kommaseparerade kategorier"),
+    flow: Optional[str] = Query(None, pattern="^(expense|income)$"),
     typ: Optional[str] = None,
     year: Optional[int] = None,
     date_from: Optional[str] = None,
@@ -257,6 +300,8 @@ def transactions(
     search: Optional[str] = None,
     exclude_overforing: bool = False,
     max_amount: Optional[float] = None,
+    chart_max_amount: Optional[float] = None,
+    chart_exclusions: bool = False,
     sort_by: str = Query("txn_date", pattern="^(txn_date|amount|description|account|category)$"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
     limit: int = Query(100, ge=1, le=500),
@@ -264,10 +309,23 @@ def transactions(
     db: Session = Depends(get_db),
 ):
     df, dt = _parse_date(date_from), _parse_date(date_to)
+    acct_list = [a.strip() for a in accounts.split(",") if a.strip()] if accounts else None
+    cat_list = [c.strip() for c in categories.split(",") if c.strip()] if categories else None
     filters = dict(
-        account=account, category=category, typ=typ, year=year,
-        date_from=df, date_to=dt, search=search, exclude_overforing=exclude_overforing,
+        account=account if not acct_list else None,
+        accounts=acct_list,
+        category=category if not cat_list else None,
+        categories=cat_list,
+        flow=flow,
+        typ=typ,
+        year=year,
+        date_from=df,
+        date_to=dt,
+        search=search,
+        exclude_overforing=exclude_overforing,
         max_amount=max_amount,
+        chart_max_amount=chart_max_amount,
+        chart_exclusions=chart_exclusions,
     )
     items = list_transactions(db, sort_by=sort_by, sort_dir=sort_dir, limit=limit, offset=offset, **filters)
     total = count_transactions(db, **filters)
@@ -289,7 +347,16 @@ def create_manual(body: FinanceManualCreate, db: Session = Depends(get_db)):
     row["sender"] = None
     row["receiver"] = None
     enrich_transaction(row, cfg.get("own_accounts_regex") or "")
-    return create_transaction(db, row)
+    txn = create_transaction(db, row)
+    log_finance_activity(
+        db,
+        event_type="manual_txn",
+        account=body.account,
+        transaction_count=1,
+        summary=f"Manuell transaktion: {body.description or 'utan beskrivning'} → {body.account}",
+        details={"amount": body.amount, "txn_date": str(body.txn_date)},
+    )
+    return txn
 
 
 @router.delete("/transactions/{txn_id}", status_code=204)
@@ -339,7 +406,11 @@ def recategorize(
     result = categorize_with_ai(payload, cfg)
     if not result["ok"] and not result.get("mapping"):
         raise HTTPException(status_code=502, detail={"message": "AI-kategorisering misslyckades", "errors": result.get("errors")})
-    apply_result = apply_category_mapping(db, result["mapping"])
+    apply_result = apply_category_mapping(
+        db,
+        result["mapping"],
+        lock_ids=[t["id"] for t in payload],
+    )
     return {
         "ok": True,
         "method": "ai",
@@ -356,17 +427,58 @@ def list_categories():
     return {"categories": sorted_categories()}
 
 
+@router.get("/compare")
+def compare_accounts(
+    account_a: str = Query(..., min_length=1),
+    account_b: str = Query(..., min_length=1),
+    categories: Optional[str] = Query(None, description="Kommaseparerade kategorier, tom = alla utgifter"),
+    year: Optional[int] = None,
+    month_from: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+    month_to: Optional[str] = Query(None, pattern=r"^\d{4}-\d{2}$"),
+    months: int = Query(12, ge=1, le=60),
+    exclude_overforing: bool = True,
+    chart_max_amount: Optional[float] = Query(100000, ge=0),
+    db: Session = Depends(get_db),
+):
+    cat_list = [c.strip() for c in categories.split(",")] if categories else None
+    result = build_account_compare(
+        db,
+        account_a=account_a,
+        account_b=account_b,
+        categories=cat_list,
+        year=year,
+        month_from=month_from,
+        month_to=month_to,
+        months=months,
+        exclude_overforing=exclude_overforing,
+        chart_max_amount=chart_max_amount,
+    )
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @router.get("/categories/stats")
 def categories_stats(
     year: Optional[int] = None,
     month: Optional[int] = None,
+    account: Optional[str] = None,
     expenses_only: bool = True,
+    exclude_overforing: bool = False,
     db: Session = Depends(get_db),
 ):
     return {
         "year": year,
         "month": month,
-        "items": category_stats(db, year=year, month=month, expenses_only=expenses_only),
+        "account": account,
+        "items": category_stats(
+            db,
+            year=year,
+            month=month,
+            account=account or None,
+            expenses_only=expenses_only,
+            exclude_overforing=exclude_overforing,
+        ),
     }
 
 
@@ -409,23 +521,77 @@ def ai_queue(db: Session = Depends(get_db)):
 
 @router.post("/ai/batch")
 def ai_batch(
-    limit: int = Query(15, ge=1, le=30),
+    limit: Optional[int] = Query(None, ge=1, le=30),
     db: Session = Depends(get_db),
 ):
-    from app.services.finance.ai_finance import categorize_batch
+    from app.services.finance.ai_finance import categorize_batch, get_ai_settings
 
     cfg = get_finance_config()
     _require_ai_enabled(cfg)
-    rows = get_uncategorized(db, limit=limit, offset=0)
-    # Always take from start — applied rows leave queue automatically
+    settings = get_ai_settings(cfg)
+    batch_limit = limit if limit is not None else settings["batch_size"]
+    rows = get_uncategorized(db, limit=batch_limit, offset=0)
+    # Always take from start — applied/locked rows leave queue automatically
     if not rows:
-        return {"ok": True, "done": True, "remaining": 0, "mapping": {}, "preview": [], "errors": []}
+        return {
+            "ok": True,
+            "done": True,
+            "remaining": 0,
+            "mapping": {},
+            "preview": [],
+            "errors": [],
+            "batch_size": 0,
+            "elapsed_seconds": 0,
+        }
 
     payload = [{"id": t.id, "description": t.description, "amount": t.amount, "typ": t.typ} for t in rows]
+    by_id = {t.id: t for t in rows}
     result = categorize_batch(payload, cfg)
-    apply_result = {"changed": 0, "by_category": {}}
-    if result.get("mapping"):
-        apply_result = apply_category_mapping(db, result["mapping"])
+    apply_result = {"changed": 0, "by_category": {}, "locked": 0}
+    if result.get("ok"):
+        log_items = []
+        for p in result.get("preview") or []:
+            tid = int(p.get("id"))
+            t = by_id.get(tid)
+            if not t:
+                continue
+            cat = str(p.get("category") or "Övrigt")
+            conf = p.get("confidence")
+            try:
+                conf_val = round(float(conf), 2) if conf is not None else None
+            except (TypeError, ValueError):
+                conf_val = None
+            log_items.append({
+                "transaction_id": tid,
+                "description": t.description or "",
+                "amount": float(t.amount),
+                "txn_date": t.txn_date.isoformat() if t.txn_date else None,
+                "account": t.account,
+                "previous_category": t.category,
+                "category": cat,
+                "confidence": conf_val,
+                "is_ovrigt": cat == "Övrigt",
+                "locked": True,
+            })
+        apply_result = apply_category_mapping(
+            db,
+            result.get("mapping") or {},
+            lock_ids=result.get("reviewed_ids") or [t.id for t in rows],
+        )
+        if log_items:
+            ovrigt_n = sum(1 for i in log_items if i["is_ovrigt"])
+            changed_n = len(log_items) - ovrigt_n
+            log_finance_activity(
+                db,
+                event_type="ai_categorize",
+                summary=(
+                    f"AI granskade {len(log_items)} transaktioner: "
+                    f"{changed_n} kategoriserade, {ovrigt_n} lämnades som Övrigt"
+                ),
+                transaction_count=changed_n,
+                skipped_count=ovrigt_n,
+                details={"items": log_items},
+            )
     remaining = count_uncategorized(db)
     return {
         "ok": result["ok"],
@@ -434,11 +600,45 @@ def ai_batch(
         "batch_size": len(payload),
         "changed": apply_result["changed"],
         "by_category": apply_result["by_category"],
+        "locked": apply_result.get("locked", 0),
         "skipped_uncertain": result.get("skipped", []),
         "preview": result.get("preview", []),
         "current": payload[0]["description"][:80] if payload else "",
         "errors": result.get("errors", []),
+        "elapsed_seconds": result.get("elapsed_seconds", 0),
+        "timeout_seconds": settings["timeout_seconds"],
     }
+
+
+@router.get("/ai/reviewed", response_model=FinanceAiReviewedListResponse)
+def ai_reviewed(
+    only_ovrigt: bool = Query(False),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
+    """Browse locked non-manual transactions (past AI reviews without per-run log)."""
+    rows, total = list_locked_transactions(
+        db, only_ovrigt=only_ovrigt, limit=limit, offset=offset
+    )
+    return FinanceAiReviewedListResponse(
+        total=total,
+        offset=offset,
+        limit=limit,
+        items=[
+            FinanceAiReviewedItem(
+                id=t.id,
+                txn_date=t.txn_date,
+                description=t.description or "",
+                amount=float(t.amount),
+                account=t.account,
+                category=t.category,
+                category_locked=bool(getattr(t, "category_locked", False)),
+                is_ovrigt=t.category == "Övrigt",
+            )
+            for t in rows
+        ],
+    )
 
 
 @router.post("/ai/apply")

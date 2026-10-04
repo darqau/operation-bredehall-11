@@ -2,7 +2,7 @@
   "storage_mode": "local",
   "folder_map": {
     "Gemensamt Nordea": "1U5W4QE7Bgk432FCoOBfWDKCQP7su1wuH",
-    "Lönekonto Nordea": "1r-ADjFekM97OzU9JM8Pr5tCx71BNBZe7",
+    "Linneas Lönekonto": "1r-ADjFekM97OzU9JM8Pr5tCx71BNBZe7",
     "Lönekonto Swedbank": "19zsxBWloi-CgzL1nqO6OIk8WqWiYsU1O",
     "Linneas CSN": "1soHvN6meUV6kuhAv-nesnp9rxgvmVK_q",
     "Linneas Sparkonto": "1TIfPJkeyE386Q6yvsbo_GlLHASJGx0IT",
@@ -12,11 +12,11 @@
   },
   "account_numbers": {
     "Gemensamt Nordea": "1936 20 14939",
-    "Lönekonto Nordea": "920117-1221",
+    "Linneas Lönekonto": "920117-1221",
     "Lönekonto Swedbank": "9735695422",
     "Linneas CSN": "3100 22 43645",
-    "Patriks Lönekonto": "1127 21 36671",
-    "Linneas Sparkonto": "3055 01 01268"
+    "Linneas Sparkonto": "3055 01 01268",
+    "Patriks Lönekonto": "1127 21 36671"
   },
   "archive_folder_id": "1NR3ch3fIpfNDVfwGOhNs30OgYsWGLsZa",
   "gdrive_credentials_path": "",
@@ -25,5 +25,7 @@
   "ai_enabled": true,
   "ai_base_url": "http://localhost:1234/v1",
   "ai_api_key": "lm-studio",
-  "ai_model": "gemma-4-12b-it"
+  "ai_model": "gemma-4-12b-it",
+  "ai_timeout_seconds": 300,
+  "ai_batch_size": 5
 }

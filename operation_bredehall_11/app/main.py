@@ -6,7 +6,7 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -27,7 +27,14 @@ def _migrate_finance_on_startup() -> None:
     """Persist config renames and fix mis-filed Patrik Nordea transactions."""
     import json
 
-    from app.crud_finance import migrate_el_category, migrate_house_purchase_duplicates, migrate_patrik_lonekonto_transactions
+    from app.crud_finance import (
+        migrate_account_assignments,
+        migrate_el_category,
+        migrate_house_purchase_duplicates,
+        migrate_linneas_csn_cleanup,
+        migrate_lonekonto_nordea_rename,
+        migrate_patrik_lonekonto_transactions,
+    )
     from app.database import SessionLocal
     from app.services.finance.config import CONFIG_PATH, get_finance_config, migrate_legacy_config, save_finance_config
 
@@ -54,6 +61,15 @@ def _migrate_finance_on_startup() -> None:
         migrate_patrik_lonekonto_transactions(db)
         migrate_house_purchase_duplicates(db)
         migrate_el_category(db)
+        nordea = migrate_lonekonto_nordea_rename(db)
+        if nordea.get("moved"):
+            logger.info("Renamed Lönekonto Nordea → Linneas Lönekonto: %s", nordea)
+        acct = migrate_account_assignments(db)
+        if acct.get("moved") or acct.get("removed_misfiled"):
+            logger.info("Account assignment migration: %s", acct)
+        csn = migrate_linneas_csn_cleanup(db)
+        if csn.get("moved") or csn.get("deduped"):
+            logger.info("Linneas CSN cleanup: %s", csn)
     except Exception:
         logger.exception("Finance data migration failed")
         db.rollback()
@@ -154,3 +170,40 @@ def auth_status():
 
     key = get_app_api_key()
     return {"auth_required": bool(key)}
+
+
+def _client_is_localhost(request) -> bool:
+    if not request.client:
+        return False
+    return request.client.host in ("127.0.0.1", "::1", "localhost")
+
+
+@app.get("/api/shutdown/status")
+def shutdown_status(request: Request):
+    """True when Stäng is allowed (local dev / exe on this machine)."""
+    import os
+
+    allowed = _client_is_localhost(request) or os.environ.get("ALLOW_SHUTDOWN") == "1"
+    return {"allowed": allowed}
+
+
+@app.post("/api/shutdown")
+def shutdown_server(request: Request):
+    """Stop uvicorn — only from localhost (Start Bredehall.exe)."""
+    import os
+    import signal
+    import threading
+
+    if not _client_is_localhost(request) and os.environ.get("ALLOW_SHUTDOWN") != "1":
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=403, detail="Stängning tillåten endast lokalt.")
+
+    def _stop() -> None:
+        import time
+
+        time.sleep(0.2)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    threading.Thread(target=_stop, daemon=True).start()
+    return {"ok": True, "message": "Servern stoppas…"}

@@ -9,16 +9,16 @@ from typing import Any, Dict, Optional
 
 from app.database import DATA_DIR
 
-# Example placeholders — fill in real values via Settings UI or finance_config.json.
+# Example placeholders - fill in real values via Settings UI or finance_config.json.
 EXAMPLE_FOLDER_MAP: Dict[str, str] = {
     "Gemensamt konto": "",
-    "Lönekonto": "",
+    "L\u00f6nekonto": "",
     "Sparkonto": "",
 }
 
 EXAMPLE_ACCOUNT_NUMBERS: Dict[str, str] = {
     "Gemensamt konto": "1234 56 78901",
-    "Lönekonto": "9876543210",
+    "L\u00f6nekonto": "9876543210",
     "Sparkonto": "1234 56 78999",
 }
 
@@ -28,12 +28,15 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "account_numbers": dict(EXAMPLE_ACCOUNT_NUMBERS),
     "archive_folder_id": "",
     "gdrive_credentials_path": "",
-    "own_accounts_regex": r"Personkonto|Sparkonto|Lönekonto",
+    "own_accounts_regex": r"Personkonto|Sparkonto|L\u00f6nekonto",
     "csv_delimiter": ";",
     "ai_enabled": False,
     "ai_base_url": "http://localhost:1234/v1",
     "ai_api_key": "lm-studio",
     "ai_model": "local-model",
+    # Local 9B/12B models often need 2–5 min per small batch; keep batches small.
+    "ai_timeout_seconds": 300,
+    "ai_batch_size": 5,
 }
 
 CONFIG_PATH = DATA_DIR / "finance_config.json"
@@ -73,19 +76,60 @@ def sync_ha_options() -> None:
         save_finance_config(cfg)
 
 
+def _is_patrik_lonekonto_number(num: str) -> bool:
+    n = (num or "").replace(" ", "")
+    return "1127" in n and "36671" in n
+
+
+def rename_local_finance_folder(old_name: str, new_name: str) -> None:
+    """Merge inbox/archive subfolders when an account is renamed."""
+    import shutil
+
+    for base in (FINANCE_INBOX, FINANCE_ARCHIVE):
+        src = base / old_name
+        if not src.is_dir():
+            continue
+        dst = base / new_name
+        dst.mkdir(parents=True, exist_ok=True)
+        for item in src.iterdir():
+            target = dst / item.name
+            if not target.exists():
+                shutil.move(str(item), str(target))
+        try:
+            src.rmdir()
+        except OSError:
+            pass
+
+
 def migrate_legacy_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """One-time renames / fixes for stored finance config."""
     folder_map = dict(cfg.get("folder_map") or {})
-    if "Linneas Lönekonto" in folder_map and "Patriks Lönekonto" not in folder_map:
-        folder_map["Patriks Lönekonto"] = folder_map.pop("Linneas Lönekonto")
-    cfg["folder_map"] = folder_map
-
     account_numbers = dict(cfg.get("account_numbers") or {})
-    if "Linneas Lönekonto" in account_numbers:
-        if "Patriks Lönekonto" not in account_numbers:
-            account_numbers["Patriks Lönekonto"] = account_numbers.pop("Linneas Lönekonto")
+
+    if "L\u00f6nekonto Nordea" in folder_map:
+        if "Linneas L\u00f6nekonto" not in folder_map:
+            folder_map["Linneas L\u00f6nekonto"] = folder_map.pop("L\u00f6nekonto Nordea")
         else:
-            account_numbers.pop("Linneas Lönekonto", None)
+            folder_map.pop("L\u00f6nekonto Nordea", None)
+    if "L\u00f6nekonto Nordea" in account_numbers:
+        if "Linneas L\u00f6nekonto" not in account_numbers:
+            account_numbers["Linneas L\u00f6nekonto"] = account_numbers.pop("L\u00f6nekonto Nordea")
+        else:
+            account_numbers.pop("L\u00f6nekonto Nordea", None)
+
+    linneas_num = account_numbers.get("Linneas L\u00f6nekonto", "")
+    if "Linneas L\u00f6nekonto" in folder_map and _is_patrik_lonekonto_number(linneas_num):
+        if "Patriks L\u00f6nekonto" not in folder_map:
+            folder_map["Patriks L\u00f6nekonto"] = folder_map.pop("Linneas L\u00f6nekonto")
+        else:
+            folder_map.pop("Linneas L\u00f6nekonto", None)
+    if "Linneas L\u00f6nekonto" in account_numbers and _is_patrik_lonekonto_number(linneas_num):
+        if "Patriks L\u00f6nekonto" not in account_numbers:
+            account_numbers["Patriks L\u00f6nekonto"] = account_numbers.pop("Linneas L\u00f6nekonto")
+        else:
+            account_numbers.pop("Linneas L\u00f6nekonto", None)
+
+    cfg["folder_map"] = folder_map
     cfg["account_numbers"] = account_numbers
     return cfg
 
@@ -109,12 +153,20 @@ def merge_default_account_numbers(account_numbers: Dict[str, str]) -> Dict[str, 
 
 def account_number_for(name: str, config: Optional[Dict[str, Any]] = None) -> str:
     cfg = config or get_finance_config()
-    return (cfg.get("account_numbers") or {}).get(name, "").strip()
+    numbers = cfg.get("account_numbers") or {}
+    num = (numbers.get(name) or "").strip()
+    if num:
+        return num
+    if name == "Linneas L\u00f6nekonto":
+        return (numbers.get("L\u00f6nekonto Nordea") or "").strip()
+    return ""
 
 
 def ensure_all_inbox_folders(folder_map: Dict[str, str]) -> None:
     _ensure_dirs()
     for account in folder_map:
+        if "?" in account:
+            continue
         (FINANCE_INBOX / account).mkdir(parents=True, exist_ok=True)
 
 

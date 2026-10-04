@@ -21,7 +21,7 @@ def test_files_not_archived_on_db_failure(tmp_path):
 
     db = SessionLocal()
     with patch("app.services.finance.processor.create_transactions_bulk", side_effect=RuntimeError("db fail")):
-        result = process_local_folders(db, cfg)
+        result = process_local_folders(db, cfg, trusted_keys={f"{account}/test.csv"})
     assert result["ok"] is False
     assert csv_path.exists()
     csv_path.unlink(missing_ok=True)

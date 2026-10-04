@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections import defaultdict
 from datetime import date, datetime
@@ -11,6 +12,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import FinanceLoan, FinanceTransaction
+from app.database import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -74,14 +76,24 @@ def load_existing_fingerprints(db: Session, accounts: Optional[set[str]] = None)
     return {_fingerprint_from_model(t) for t in q.all()}
 
 
-def _apply_txn_filters(q, *, account=None, category=None, typ=None, year=None,
+def _apply_txn_filters(q, *, account=None, accounts=None, category=None, categories=None,
+                       flow=None, typ=None, year=None,
                        date_from=None, date_to=None, search=None,
-                       exclude_overforing=False, max_amount=None):
-    """Shared filtering used by both list_transactions and count_transactions."""
-    if account:
+                       exclude_overforing=False, max_amount=None, chart_max_amount=None,
+                       chart_exclusions=False):
+    """Shared filtering used by list/count/sum transaction queries."""
+    if accounts:
+        q = q.filter(FinanceTransaction.account.in_(accounts))
+    elif account:
         q = q.filter(FinanceTransaction.account == account)
-    if category:
+    if categories:
+        q = q.filter(FinanceTransaction.category.in_(categories))
+    elif category:
         q = q.filter(FinanceTransaction.category == category)
+    if flow == "expense":
+        q = q.filter(FinanceTransaction.amount < 0)
+    elif flow == "income":
+        q = q.filter(FinanceTransaction.amount > 0)
     if typ:
         q = q.filter(FinanceTransaction.typ == typ)
     if exclude_overforing:
@@ -98,8 +110,12 @@ def _apply_txn_filters(q, *, account=None, category=None, typ=None, year=None,
             FinanceTransaction.txn_date >= date(year, 1, 1),
             FinanceTransaction.txn_date <= date(year, 12, 31),
         )
-    if max_amount and max_amount > 0:
-        q = q.filter(func.abs(FinanceTransaction.amount) <= max_amount)
+    cap = chart_max_amount if chart_max_amount is not None else max_amount
+    if cap and cap > 0:
+        q = q.filter(func.abs(FinanceTransaction.amount) <= cap)
+    if chart_exclusions:
+        q = q.filter(FinanceTransaction.category != "Bostadsköp (engång)")
+        q = q.filter(~func.lower(FinanceTransaction.description).like("%slutlikvid%"))
     return q
 
 
@@ -197,7 +213,10 @@ def create_transactions_bulk(db: Session, rows: List[dict]) -> dict:
 def list_transactions(
     db: Session,
     account: Optional[str] = None,
+    accounts: Optional[List[str]] = None,
     category: Optional[str] = None,
+    categories: Optional[List[str]] = None,
+    flow: Optional[str] = None,
     typ: Optional[str] = None,
     year: Optional[int] = None,
     date_from: Optional[date] = None,
@@ -205,6 +224,8 @@ def list_transactions(
     search: Optional[str] = None,
     exclude_overforing: bool = False,
     max_amount: Optional[float] = None,
+    chart_max_amount: Optional[float] = None,
+    chart_exclusions: bool = False,
     sort_by: str = "txn_date",
     sort_dir: str = "desc",
     limit: int = 100,
@@ -212,9 +233,11 @@ def list_transactions(
 ) -> List[FinanceTransaction]:
     q = _apply_txn_filters(
         db.query(FinanceTransaction),
-        account=account, category=category, typ=typ, year=year,
+        account=account, accounts=accounts, category=category, categories=categories,
+        flow=flow, typ=typ, year=year,
         date_from=date_from, date_to=date_to, search=search,
         exclude_overforing=exclude_overforing, max_amount=max_amount,
+        chart_max_amount=chart_max_amount, chart_exclusions=chart_exclusions,
     )
 
     sort_cols = {
@@ -237,7 +260,10 @@ def count_transactions(db: Session, **filters) -> int:
     q = _apply_txn_filters(
         db.query(FinanceTransaction),
         account=filters.get("account"),
+        accounts=filters.get("accounts"),
         category=filters.get("category"),
+        categories=filters.get("categories"),
+        flow=filters.get("flow"),
         typ=filters.get("typ"),
         year=filters.get("year"),
         date_from=filters.get("date_from"),
@@ -245,6 +271,8 @@ def count_transactions(db: Session, **filters) -> int:
         search=filters.get("search"),
         exclude_overforing=filters.get("exclude_overforing", False),
         max_amount=filters.get("max_amount"),
+        chart_max_amount=filters.get("chart_max_amount"),
+        chart_exclusions=filters.get("chart_exclusions", False),
     )
     return q.count()
 
@@ -253,7 +281,10 @@ def sum_transactions(db: Session, **filters) -> float:
     q = _apply_txn_filters(
         db.query(FinanceTransaction),
         account=filters.get("account"),
+        accounts=filters.get("accounts"),
         category=filters.get("category"),
+        categories=filters.get("categories"),
+        flow=filters.get("flow"),
         typ=filters.get("typ"),
         year=filters.get("year"),
         date_from=filters.get("date_from"),
@@ -261,6 +292,8 @@ def sum_transactions(db: Session, **filters) -> float:
         search=filters.get("search"),
         exclude_overforing=filters.get("exclude_overforing", False),
         max_amount=filters.get("max_amount"),
+        chart_max_amount=filters.get("chart_max_amount"),
+        chart_exclusions=filters.get("chart_exclusions", False),
     )
     result = q.with_entities(func.coalesce(func.sum(FinanceTransaction.amount), 0.0)).scalar()
     return round(float(result or 0), 2)
@@ -276,6 +309,14 @@ def delete_transaction(db: Session, txn_id: int) -> bool:
 
 
 def clear_all_transactions(db: Session) -> int:
+    """Delete all transactions — only allowed in tests (temp DATA_DIR) or with ALLOW_WIPE=1."""
+    if os.environ.get("ALLOW_WIPE") != "1":
+        data_path = str(DATA_DIR)
+        if "bredehall_test_" not in data_path:
+            raise RuntimeError(
+                "Radering av alla transaktioner är blockerad på produktionsdatabasen. "
+                "Sätt ALLOW_WIPE=1 endast medvetet, eller kör tester via pytest."
+            )
     count = db.query(FinanceTransaction).count()
     db.query(FinanceTransaction).delete()
     db.commit()
@@ -417,9 +458,14 @@ def detect_internal_transfers(db: Session, date_window_days: int = 3, own_accoun
 
 
 def get_uncategorized(db: Session, limit: int = 2000, offset: int = 0) -> List[FinanceTransaction]:
+    """Övrigt rows not yet locked (manual lock or AI-reviewed)."""
     return (
         db.query(FinanceTransaction)
-        .filter(FinanceTransaction.category == "Övrigt", FinanceTransaction.is_manual == False)  # noqa: E712
+        .filter(
+            FinanceTransaction.category == "Övrigt",
+            FinanceTransaction.is_manual == False,  # noqa: E712
+            FinanceTransaction.category_locked == False,  # noqa: E712
+        )
         .order_by(FinanceTransaction.txn_date.desc())
         .offset(offset)
         .limit(limit)
@@ -430,7 +476,11 @@ def get_uncategorized(db: Session, limit: int = 2000, offset: int = 0) -> List[F
 def count_uncategorized(db: Session) -> int:
     return (
         db.query(FinanceTransaction)
-        .filter(FinanceTransaction.category == "Övrigt", FinanceTransaction.is_manual == False)  # noqa: E712
+        .filter(
+            FinanceTransaction.category == "Övrigt",
+            FinanceTransaction.is_manual == False,  # noqa: E712
+            FinanceTransaction.category_locked == False,  # noqa: E712
+        )
         .count()
     )
 
@@ -486,7 +536,9 @@ def category_stats(
     db: Session,
     year: Optional[int] = None,
     month: Optional[int] = None,
+    account: Optional[str] = None,
     expenses_only: bool = True,
+    exclude_overforing: bool = False,
 ) -> List[dict]:
     q = db.query(
         FinanceTransaction.category,
@@ -495,6 +547,10 @@ def category_stats(
     ).group_by(FinanceTransaction.category)
     if expenses_only:
         q = q.filter(FinanceTransaction.amount < 0)
+    if exclude_overforing:
+        q = q.filter(FinanceTransaction.typ != "Överföring")
+    if account:
+        q = q.filter(FinanceTransaction.account == account)
     if year:
         q = q.filter(func.strftime("%Y", FinanceTransaction.txn_date) == str(year))
     if month and year:
@@ -506,20 +562,51 @@ def category_stats(
     ]
 
 
-def apply_category_mapping(db: Session, mapping: dict) -> dict:
-    """Apply id→category mapping. Returns {changed, by_category}."""
+def apply_category_mapping(db: Session, mapping: dict, *, lock_ids: Optional[list] = None) -> dict:
+    """Apply id→category mapping. Optionally lock reviewed ids (incl. Övrigt).
+
+    Returns {changed, by_category, locked}.
+    """
     by_category: dict = {}
     changed = 0
     for tid, cat in mapping.items():
         if not cat or cat == "Övrigt":
             continue
         t = db.query(FinanceTransaction).filter(FinanceTransaction.id == int(tid)).first()
-        if t and not getattr(t, "category_locked", False) and t.category != cat:
-            t.category = cat
-            changed += 1
-            by_category[cat] = by_category.get(cat, 0) + 1
+        if t and not getattr(t, "category_locked", False):
+            if t.category != cat:
+                t.category = cat
+                changed += 1
+                by_category[cat] = by_category.get(cat, 0) + 1
+            t.category_locked = True
+    locked = 0
+    for tid in lock_ids or []:
+        t = db.query(FinanceTransaction).filter(FinanceTransaction.id == int(tid)).first()
+        if t and not getattr(t, "category_locked", False):
+            t.category_locked = True
+            locked += 1
     db.commit()
-    return {"changed": changed, "by_category": by_category}
+    return {"changed": changed, "by_category": by_category, "locked": locked}
+
+
+def list_locked_transactions(
+    db: Session,
+    *,
+    only_ovrigt: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[List[FinanceTransaction], int]:
+    """Locked non-manual rows — used to verify past AI reviews (no per-run log)."""
+    q = db.query(FinanceTransaction).filter(
+        FinanceTransaction.category_locked == True,  # noqa: E712
+        FinanceTransaction.is_manual == False,  # noqa: E712
+    )
+    if only_ovrigt:
+        q = q.filter(FinanceTransaction.category == "Övrigt")
+    q = q.order_by(FinanceTransaction.id.desc())
+    total = q.count()
+    rows = q.offset(offset).limit(limit).all()
+    return rows, total
 
 
 # ── Loans / debts ─────────────────────────────────────────────────────
@@ -746,3 +833,191 @@ def migrate_patrik_lonekonto_transactions(db: Session) -> dict:
 
     db.commit()
     return {"moved": moved, "deduped": deduped, "total": len(seen)}
+
+
+def _infer_account_for_transaction(txn: FinanceTransaction, numbers: dict[str, str]) -> Optional[str]:
+    return infer_account_from_fields(
+        source_file=txn.source_file or "",
+        sender=txn.sender,
+        receiver=txn.receiver,
+        numbers=numbers,
+    )
+
+
+def infer_account_from_fields(
+    *,
+    source_file: str = "",
+    sender: Optional[str] = None,
+    receiver: Optional[str] = None,
+    numbers: dict[str, str],
+) -> Optional[str]:
+    from collections import Counter
+
+    from app.services.finance.detect import number_in_text, primary_spark_number_in_filename
+
+    sf = source_file or ""
+    if sf:
+        spark = primary_spark_number_in_filename(sf)
+        if spark:
+            spark_norm = re.sub(r"\s", "", spark)
+            for account, num in numbers.items():
+                if num and re.sub(r"\s", "", num) == spark_norm:
+                    return account
+            suffix = spark.split()[-1]
+            spark_fallback = {"43653": "Linneas L\u00f6nekonto", "43661": "Linneas L\u00f6nekonto"}.get(suffix)
+            if spark_fallback and spark_fallback in numbers:
+                return spark_fallback
+
+        best: Optional[tuple[int, str]] = None
+        for account, num in numbers.items():
+            if num and number_in_text(num, sf):
+                key = len(re.sub(r"\s", "", num))
+                if best is None or key > best[0]:
+                    best = (key, account)
+        if best:
+            return best[1]
+
+        sf_lower = sf.casefold()
+        file_hints: list[tuple[str, str]] = [
+            ("transaktioner_personligt_swedbank", "L\u00f6nekonto Swedbank"),
+            ("transaktioner_", "L\u00f6nekonto Swedbank"),
+        ]
+        for needle, account in file_hints:
+            if account in numbers and needle in sf_lower:
+                return account
+
+    votes: Counter[str] = Counter()
+    for field in (sender, receiver):
+        if not field:
+            continue
+        for account, num in numbers.items():
+            if num and number_in_text(num, field):
+                votes[account] += 1
+    if votes:
+        return votes.most_common(1)[0][0]
+
+    return None
+
+
+def migrate_linneas_csn_cleanup(db: Session) -> dict:
+    """Dedupe Linneas CSN and move rows from other SPARKONTO numbers (43653/43661)."""
+    from app.services.finance.detect import primary_spark_number_in_filename
+
+    target = "Linneas CSN"
+    csn_num = "3100 22 43645"
+    csn_norm = re.sub(r"\s", "", csn_num)
+    moved = 0
+    deduped = 0
+
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.account == target,
+            FinanceTransaction.is_manual == False,  # noqa: E712
+        )
+        .order_by(FinanceTransaction.id.asc())
+        .all()
+    )
+    for txn in rows:
+        spark = primary_spark_number_in_filename(txn.source_file or "")
+        if spark and re.sub(r"\s", "", spark) != csn_norm:
+            txn.account = "Linneas Lönekonto"
+            moved += 1
+
+    seen: set[tuple] = set()
+    for txn in (
+        db.query(FinanceTransaction)
+        .filter(
+            FinanceTransaction.account == target,
+            FinanceTransaction.is_manual == False,  # noqa: E712
+        )
+        .order_by(FinanceTransaction.id.asc())
+        .all()
+    ):
+        fp = _fingerprint_from_model(txn)
+        if fp in seen:
+            db.delete(txn)
+            deduped += 1
+        else:
+            seen.add(fp)
+
+    if moved or deduped:
+        db.commit()
+    return {"moved": moved, "deduped": deduped, "remaining": len(seen)}
+
+
+def migrate_account_assignments(db: Session) -> dict:
+    """Move mis-filed CSV rows to the account matching source_file / avsändare."""
+    from app.services.finance.config import get_finance_config
+
+    numbers = {
+        acc: (num or "").strip()
+        for acc, num in (get_finance_config().get("account_numbers") or {}).items()
+        if (num or "").strip()
+    }
+    if not numbers:
+        return {"moved": 0, "skipped_duplicate": 0}
+
+    seen = load_existing_fingerprints(db)
+    moved = 0
+    skipped = 0
+    removed = 0
+
+    rows = (
+        db.query(FinanceTransaction)
+        .filter(FinanceTransaction.is_manual == False)  # noqa: E712
+        .order_by(FinanceTransaction.id.asc())
+        .all()
+    )
+    for txn in rows:
+        target = _infer_account_for_transaction(txn, numbers)
+        if not target or target == txn.account:
+            continue
+        new_fp = transaction_fingerprint(
+            target, txn.txn_date, txn.amount, txn.description, amount_ore=txn.amount_ore
+        )
+        old_fp = _fingerprint_from_model(txn)
+        if new_fp in seen:
+            db.delete(txn)
+            seen.discard(old_fp)
+            removed += 1
+            continue
+        seen.discard(old_fp)
+        txn.account = target
+        seen.add(new_fp)
+        moved += 1
+
+    if moved or removed:
+        db.commit()
+    return {"moved": moved, "skipped_duplicate": skipped, "removed_misfiled": removed}
+
+
+def migrate_lonekonto_nordea_rename(db: Session) -> dict:
+    """Rename Lönekonto Nordea (920117-1221) → Linneas Lönekonto."""
+    import json
+
+    from app.services.finance.config import CONFIG_PATH, migrate_legacy_config, save_finance_config
+
+    if CONFIG_PATH.is_file():
+        try:
+            stored = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            migrated = migrate_legacy_config(dict(stored))
+            nums = migrated.setdefault("account_numbers", {})
+            if "Linneas Lönekonto" not in nums and nums.get("Lönekonto Nordea"):
+                nums["Linneas Lönekonto"] = nums.pop("Lönekonto Nordea")
+            if migrated != stored:
+                save_finance_config(migrated)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    from app.services.finance.config import rename_local_finance_folder
+
+    moved = (
+        db.query(FinanceTransaction)
+        .filter(FinanceTransaction.account == "Lönekonto Nordea")
+        .update({FinanceTransaction.account: "Linneas Lönekonto"}, synchronize_session=False)
+    )
+    if moved:
+        db.commit()
+    rename_local_finance_folder("Lönekonto Nordea", "Linneas Lönekonto")
+    return {"moved": moved}

@@ -16,7 +16,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 
-PUBLIC_PREFIXES = ("/health", "/static/", "/api/auth/status")
+PUBLIC_PREFIXES = ("/health", "/static/", "/api/auth/status", "/api/shutdown/status")
 
 
 def _read_ha_option(key: str) -> str:

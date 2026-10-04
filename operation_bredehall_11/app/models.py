@@ -111,6 +111,21 @@ class FinanceTransaction(Base):
     )
 
 
+class FinanceActivityLog(Base):
+    """Logg över CSV-import, manuella poster och nya konton."""
+    __tablename__ = "finance_activity_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    event_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    account: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    transaction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 class FinanceLoan(Base):
     """Manuellt underhållna lån/skulder (t.ex. bolån från bank-app)."""
     __tablename__ = "finance_loans"
