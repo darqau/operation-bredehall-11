@@ -42,6 +42,77 @@ Alternativt: **`Start Bredehall.exe`** sätter `DATA_DIR` automatiskt till `./da
 - Ekonomi: CSV-import, kategorisering (regler + valfri lokal AI), grafer, bolån/skulder
 - Kategorisida med inline-redigering
 
+## Ekonomi — arbetsflöde och API
+
+Ekonomidelen utgår från konton i **`data/finance_config.json`**. `folder_map`
+styr vilka konton som får lokala inbox-mappar under
+`data/finance/inbox/<konto>`, och `account_numbers` används för att visa
+kontonummer samt hjälpa importen att hitta rätt konto.
+
+### CSV-import
+
+1. Lägg CSV-filer i rätt inbox-mapp eller ladda upp via appen.
+2. Kör importen i appen eller `POST /api/finance/process`.
+3. Importen läser `storage_mode`:
+   - `local`: plockar `*.csv` från `data/finance/inbox/<konto>`.
+   - `gdrive`: hämtar CSV via Google Drive-konfigurationen.
+4. Rader skrivs till SQLite först. Lokala filer flyttas sedan till
+   `data/finance/archive/<konto>`; om filnamnet redan finns får kopian suffix.
+
+Viktiga begränsningar:
+
+- Uppladdning via `POST /api/finance/upload` accepterar max 10 MB per fil.
+- Kontot kan anges explicit (`account`) eller auto-detekteras från filnamn,
+  kontonummer, avsändare/mottagare och befintliga konton.
+- Okända filer lämnas kvar i inbox och returneras i `unknown_files`.
+- Filer som hör till ett annat konto kan flyttas logiskt till rätt konto och
+  syns i `rerouted`.
+- Dubbletter för importerade bankrader identifieras med konto + datum + belopp
+  i ören + normaliserad beskrivning. Manuella rader dedupliceras inte på detta
+  sätt.
+- Interna överföringar märks med `typ = "Överföring"` utifrån
+  `own_accounts_regex` och debit/kredit-par.
+
+Exempel med API-nyckel:
+
+```bash
+curl -H "X-API-Key: $APP_API_KEY" \
+  "http://127.0.0.1:8890/api/finance/transactions?accounts=Gemensamt%20konto,Sparkonto&flow=expense&year=2026&limit=50"
+```
+
+### Viktiga finance-endpoints
+
+| Endpoint | Syfte | Viktiga parametrar/svar |
+|----------|-------|-------------------------|
+| `GET /api/finance/config` | Läs ekonomiinställningar | Hemliga fält maskas; svaret visar t.ex. `has_ai_api_key`. |
+| `PUT /api/finance/config` | Uppdatera konton, lagring, AI m.m. | `ai_api_key="__UNCHANGED__"` behåller befintlig nyckel. |
+| `GET /api/finance/folders` | Lista konton/inboxar | Visar `pending_files` per konto. |
+| `POST /api/finance/folders` | Skapa konto/inbox | Loggar `account_created`. |
+| `POST /api/finance/detect` | Förhandsgranska konto-detektering för en CSV | Returnerar kandidater och eventuell `detected_account`. |
+| `POST /api/finance/upload` | Ladda upp CSV | `account` valfritt, `auto_process=true` importerar direkt. |
+| `POST /api/finance/process` | Bearbeta inbox/Drive | Returnerar antal tillagda/hoppade rader, `by_account`, `unknown_files`, `rerouted`, `internal_transfers`. |
+| `GET /api/finance/activity-log` | Import-/AI-/manuell historik | `limit`, `offset`, `event_type`; detaljer är JSON när de finns. |
+| `GET /api/finance/transactions` | Lista transaktioner | Filter: `account`/`accounts`, `category`/`categories`, `flow`, `typ`, `year`, `date_from`, `date_to`, `search`, `exclude_overforing`, `max_amount`, `chart_max_amount`, `chart_exclusions`. Svaret innehåller `total` och `sum_amount` före paginering. |
+| `GET /api/finance/dashboard` | Aggregat för ekonomi-dashboard | Om `year` saknas används hela historiken; grafer kan kapa engångsposter med `chart_max_amount`. |
+| `GET /api/finance/hero` | Snabböversikt | Summerar senaste saldon, lån/skulder, nettoförmögenhet och rullande snitt. |
+| `GET /api/finance/compare` | Jämför två konton per månad | Kräver `account_a` och `account_b`; `categories`, `year`, `month_from`, `month_to`, `months`; överföringar exkluderas som standard och inkomstkategorier kapas inte av `chart_max_amount`. |
+| `PATCH /api/finance/transactions/{id}/category` | Lås kategori | `apply_to_similar=true` applicerar på rader med exakt samma beskrivning. |
+| `GET /api/finance/ai/queue` och `POST /api/finance/ai/batch` | AI-kategorisering | Kräver `ai_enabled`; batchstorlek begränsas av query eller config. |
+| `GET/POST /api/finance/loans`, `PUT/DELETE /api/finance/loans/{id}` | Lån/skulder | Lån används i `hero.net_worth`. |
+
+### Felsökning ekonomi
+
+- **Import hittar inte konto:** kör `POST /api/finance/detect` på filen och
+  uppdatera `account_numbers` eller filnamn/inbox. Okända filer ligger kvar i
+  inbox tills det går att avgöra konto.
+- **Summeringar ser för höga ut:** använd `exclude_overforing=true` och kontrollera
+  `own_accounts_regex`; kör `POST /api/finance/detect-transfers` efter regex-ändring.
+- **Graf saknar stora köp:** dashboard och jämförelse kapar stora
+  engångsposter med `chart_max_amount` och exkluderar kategorin
+  `Bostadsköp (engång)` samt beskrivningar som innehåller `slutlikvid`.
+- **AI gör inget:** kontrollera `GET /api/finance/config` (`ai_enabled`,
+  `has_ai_api_key`) och testa `GET /api/finance/ai/test`.
+
 ## Data — en databas, samma överallt
 
 All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. Filen ligger i git tillsammans med **`data/finance_config.json`**. Det är den enda källan — du behöver inte importera CSV igen när Home Assistant uppdateras.
@@ -55,8 +126,12 @@ All data (uppgifter, transaktioner, lån) ligger i **`data/bredehall.db`**. File
 
 1. Gör ändringar lokalt på datorn.
 2. **Stoppa** den lokala servern (Ctrl+C) innan du sparar till git. Medan appen kör håller den databasen öppen — då riskerar git att missa det senaste. Tillfälliga sidofiler (`.db-wal`, `.db-shm`) försvinner när servern stoppats och allt skrivits in i huvudfilen.
-3. Commit och push (`data/bredehall.db` + `data/finance_config.json`).
-4. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
+3. Skriv ihop WAL till huvudfilen om SQLite har använt sidofiler:
+   ```bash
+   python -c "import sqlite3; c=sqlite3.connect('data/bredehall.db'); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"
+   ```
+4. Commit och push (`data/bredehall.db` + `data/finance_config.json`).
+5. Home Assistant: uppdatera add-on → **Återuppbygg** → **Starta om**.
 
 **OBS:** Ändringar du bara gör via mobil/Tailscale följer inte med till git automatiskt. Gör ekonomiändringar på datorn om de ska sparas i repot.
 
