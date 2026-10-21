@@ -24,7 +24,7 @@ operation_bredehall_11/
 │   ├── middleware/auth.py   # Valfri API-nyckel + Ingress-bypass
 │   │
 │   ├── routers/             # tasks, finance, calendar, ai
-│   ├── services/finance/    # import, dashboard, AI, config
+│   ├── services/finance/    # CSV/GDrive-import, dashboard/hero, kategorisering, AI, config
 │   ├── seed/
 │   └── static/              # SPA (index.html, app.js, vendor/)
 │
@@ -39,3 +39,16 @@ operation_bredehall_11/
 - **Lokal utveckling:** alltid `operation_bredehall_11/data/` — `launch.py` sätter `DATA_DIR`; utan env används samma mapp automatiskt
 - Använd **inte** `c:\data` på Windows (tidigare bugg — borttagen)
 - Stoppa lokal server innan commit så databasen hinner stängas rent (se Inställningar i appen)
+
+## Ekonomimodul
+
+- **`routers/finance.py`** exponerar import, dashboard, transaktionsfilter,
+  kategoriredigering, recategorize och lån/skulder under `/api/finance/*`.
+- **`crud_finance.py`** äger DB-operationer: dedup, gemensamma filter för lista/count/summa,
+  låsta kategorier, intern överföringsdetektion och lån.
+- **`services/finance/processor.py`** läser CSV från lokal inbox eller Google Drive, använder
+  lärda kategorier före regelmotorn och arkiverar lokala filer först efter lyckad import.
+- **`services/finance/dashboard.py`** bygger grafer, hero-nyckeltal, senaste saldon per konto
+  och nettoförmögenhet med lån/skulder.
+- **`services/finance/categorizer.py`** är den deterministiska regelmotorn för `typ` och
+  `category`; AI-flödet är ett valfritt komplement för okategoriserade rader.
